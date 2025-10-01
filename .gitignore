@@ -50,6 +50,4 @@ po/*~
 rsconnect/
 
 # data files
-data/raw/*
-data/hex/*
-data/interim/fia/*
+data/*
