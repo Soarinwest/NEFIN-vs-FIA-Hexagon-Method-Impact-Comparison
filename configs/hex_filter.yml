@@ -1,0 +1,5 @@
+national_hex_path: "data/hex/national_hex.geojson"
+states: [VT, NH, ME, MA, CT, RI, NY]
+method: "attribute"
+out_path: "data/hex/hex_grid.geojson"
+overwrite: false

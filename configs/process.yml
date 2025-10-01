@@ -1,0 +1,11 @@
+# configs/process.yml — parameters for process_to_hex.R
+project_dir: "."
+hex_path: "data/hex/hex_grid.geojson"
+hex_layer:
+metric: "aglb"
+years: [2018, 2019, 2020]
+level_window: 3
+rate_window: 5
+mc_reps: 25
+jitter_radius_m: 1609.34
+run_id:

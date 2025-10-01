@@ -1,0 +1,7 @@
+states2: [VT, NH, ME, MA, CT, RI, NY]
+years: [2008, 2022]
+eval_type: EXPN
+db_zip_url: https://apps.fs.usda.gov/fia/datamart/Databases/SQLite_FIADB_ENTIRE.zip
+overwrite_zip: false
+overwrite_unzip: false
+keep_zip: false
