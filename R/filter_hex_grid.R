@@ -5,20 +5,24 @@ suppressPackageStartupMessages({
 `%||%` <- function(a,b) if (!is.null(a)) a else b
 canon_states <- function(states) {
   states <- toupper(trimws(states))
-  map <- data.frame(
-    name = c("ALABAMA","ALASKA","ARIZONA","ARKANSAS","CALIFORNIA","COLORADO","CONNECTICUT","DELAWARE",
-             "DISTRICT OF COLUMBIA","FLORIDA","GEORGIA","HAWAII","IDAHO","ILLINOIS","INDIANA","IOWA","KANSAS",
-             "KENTUCKY","LOUISIANA","MAINE","MARYLAND","MASSACHUSETTS","MICHIGAN","MINNESOTA","MISSISSIPPI",
-             "MISSOURI","MONTANA","NEBRASKA","NEVADA","NEW HAMPSHIRE","NEW JERSEY","NEW MEXICO","NEW YORK",
-             "NORTH CAROLINA","NORTH DAKOTA","OHIO","OKLAHOMA","OREGON","PENNSYLVANIA","RHODE ISLAND",
-             "SOUTH CAROLINA","SOUTH DAKOTA","TENNESSEE","TEXAS","UTAH","VERMONT","VIRGINIA","WASHINGTON",
-             "WEST VIRGINIA","WISCONSIN","WYOMING","DISTRICT OF COLUMBIA"),
-    abbr = c(state.abb, "DC"),
-    fips = c(sprintf("%02d", c(1,2,4,5,6,8,9,10,11,12,13,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,
-                               32,33,34,35,36,37,38,39,40,41,42,44,45,46,47,48,49,50,51,53,54,55,56,11)))
+  
+  # 50 states (name/abbr) + add DC once with correct FIPS
+  base <- data.frame(
+    name = toupper(state.name),
+    abbr = toupper(state.abb),
+    fips = c(
+      "01","02","04","05","06","08","09","10","12","13",
+      "15","16","17","18","19","20","21","22","23","24",
+      "25","26","27","28","29","30","31","32","33","34",
+      "35","36","37","38","39","40","41","42","44","45",
+      "46","47","48","49","50","51","53","54","55","56"
+    ),
+    stringsAsFactors = FALSE
   )
-  map <- map[!duplicated(map[,c("name","abbr","fips")]),]
-  hit <- map |> dplyr::filter(name %in% states | abbr %in% states | fips %in% states) |> dplyr::distinct(name, abbr, fips)
+  dc <- data.frame(name = "DISTRICT OF COLUMBIA", abbr = "DC", fips = "11", stringsAsFactors = FALSE)
+  map <- unique(rbind(base, dc))
+  
+  hit <- subset(map, name %in% states | abbr %in% states | fips %in% states)
   if (!nrow(hit)) stop("No valid states parsed from: ", paste(states, collapse=", "))
   list(names = hit$name, abbr = hit$abbr, fips = hit$fips)
 }

@@ -1,0 +1,22 @@
+# configs/fia_states.yml
+use_states: true
+states:
+  - abbr: VT
+    url: "https://apps.fs.usda.gov/fia/datamart/Databases/SQLite_FIADB_VT.zip"
+  - abbr: NH
+    url: "https://apps.fs.usda.gov/fia/datamart/Databases/SQLite_FIADB_NH.zip"
+  - abbr: ME
+    url: "https://apps.fs.usda.gov/fia/datamart/Databases/SQLite_FIADB_ME.zip"
+  - abbr: MA
+    url: "https://apps.fs.usda.gov/fia/datamart/Databases/SQLite_FIADB_MA.zip"
+  - abbr: CT
+    url: "https://apps.fs.usda.gov/fia/datamart/Databases/SQLite_FIADB_CT.zip"
+  - abbr: RI
+    url: "https://apps.fs.usda.gov/fia/datamart/Databases/SQLite_FIADB_RI.zip"
+  - abbr: NY
+    url: "https://apps.fs.usda.gov/fia/datamart/Databases/SQLite_FIADB_NY.zip"
+years: [2008, 2022]
+eval_type: EXPN
+overwrite_zip: false
+overwrite_unzip: false
+keep_zip: false

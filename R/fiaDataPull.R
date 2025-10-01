@@ -141,22 +141,109 @@ init_project <- function(project_dir = ".") {
   paths
 }
 
+get_ppsa_plots <- function(con, evalids) {
+  if (!nrow(evalids)) return(data.frame())
+  tbls <- DBI::dbListTables(con)
+  stopifnot("POP_PLOT_STRATUM_ASSGN" %in% tbls)
+  cols <- DBI::dbListFields(con, "POP_PLOT_STRATUM_ASSGN")
+  pltcol <- if ("PLT_CN" %in% cols) "PLT_CN" else if ("PLOT_CN" %in% cols) "PLOT_CN" else stop("No PLT_CN/PLOT_CN in PPSA")
+  sql <- glue::glue("
+    SELECT DISTINCT EVALID, {pltcol} AS PLT_CN, STRATUM_CN
+    FROM POP_PLOT_STRATUM_ASSGN
+    WHERE EVALID IN ({paste(unique(evalids$EVALID), collapse=',')})
+  ")
+  DBI::dbGetQuery(con, sql)
+}
+
 # --------------------------
 # FIADB routines
 # --------------------------
+# get_evalids(): robust across state DB variants
 get_evalids <- function(con, states2, years, eval_type = "EXPN") {
   statecds <- abbr_to_statecd(states2); statecds <- statecds[!is.na(statecds)]
-  if (!length(statecds)) stop("No valid STATECDs from states2: ", paste(states2, collapse=","))
-  y <- sort(unique(as.integer(years)))
-  sql <- glue("
-    SELECT DISTINCT e.EVALID, e.RPT_YR, e.ESTN_YR, e.STATECD
+  if (!length(statecds)) stop("No valid STATECDs parsed from: ", paste(states2, collapse=","))
+  
+  yrs <- sort(unique(as.integer(years)))
+  tbls <- DBI::dbListTables(con)
+  if (!"POP_EVAL" %in% tbls) stop("POP_EVAL not found")
+  
+  pe_cols <- DBI::dbListFields(con, "POP_EVAL")
+  state_col <- if ("STATECD" %in% pe_cols) "STATECD" else stop("STATECD not found in POP_EVAL")
+  
+  # year columns present in your screenshot
+  have_report <- "REPORT_YEAR_NM" %in% pe_cols
+  have_end    <- "END_INVYR" %in% pe_cols
+  
+  # year filter
+  yr_filter <- if (have_report) {
+    glue::glue("AND CAST(e.REPORT_YEAR_NM AS INTEGER) IN ({paste(yrs, collapse=',')})")
+  } else if (have_end) {
+    glue::glue("AND e.END_INVYR IN ({paste(yrs, collapse=',')})")
+  } else {
+    "" # last resort: no year filter here
+  }
+  
+  sel_rpt  <- if (have_report) "CAST(e.REPORT_YEAR_NM AS INTEGER) AS RPT_YR," else "NULL AS RPT_YR,"
+  sel_estn <- if ("ESTN_YR" %in% pe_cols) "e.ESTN_YR AS ESTN_YR," else if (have_end) "e.END_INVYR AS ESTN_YR," else "NULL AS ESTN_YR,"
+  
+  # base (no type filter)
+  base_sql <- glue::glue("
+    SELECT DISTINCT e.EVALID, e.EVAL_GRP_CN,
+           {sel_rpt}
+           {sel_estn}
+           e.{state_col} AS STATECD
     FROM POP_EVAL e
-    JOIN POP_EVAL_TYP t USING (EVALID)
-    WHERE e.STATECD IN ({paste(statecds, collapse=',')})
-      AND e.RPT_YR   IN ({paste(y, collapse=',')})
-      AND t.EVAL_TYP = {dbQuoteString(con, eval_type)}
+    WHERE e.{state_col} IN ({paste(statecds, collapse=',')})
+      {yr_filter}
   ")
-  DBI::dbGetQuery(con, sql)
+  
+  # try to apply eval_type if possible
+  if (!is.null(eval_type) && nzchar(eval_type) && "POP_EVAL_TYP" %in% tbls) {
+    pet_cols <- DBI::dbListFields(con, "POP_EVAL_TYP")
+    typ_col  <- intersect(c("EVAL_TYP","EVALTYPE","EVAL_TYP_CD","EVAL_TYPE","EVALTYP","EVAL_TYP_NM"), pet_cols)
+    typ_col  <- if (length(typ_col)) typ_col[1] else NA_character_
+    
+    # usable join?
+    join_on_evalid <- ("EVALID" %in% pet_cols) && ("EVALID" %in% pe_cols)
+    join_on_grp    <- ("EVAL_GRP_CN" %in% pet_cols) && ("EVAL_GRP_CN" %in% pe_cols)
+    
+    if (!is.na(typ_col) && (join_on_evalid || join_on_grp)) {
+      sql <- if (join_on_evalid) {
+        glue::glue("
+          SELECT DISTINCT e.EVALID, e.EVAL_GRP_CN,
+                 {sel_rpt}
+                 {sel_estn}
+                 e.{state_col} AS STATECD
+          FROM POP_EVAL e
+          JOIN POP_EVAL_TYP t ON e.EVALID = t.EVALID
+          WHERE e.{state_col} IN ({paste(statecds, collapse=',')})
+            {yr_filter}
+            AND t.{typ_col} = {DBI::dbQuoteString(con, eval_type)}
+        ")
+      } else {
+        glue::glue("
+          SELECT DISTINCT e.EVALID, e.EVAL_GRP_CN,
+                 {sel_rpt}
+                 {sel_estn}
+                 e.{state_col} AS STATECD
+          FROM POP_EVAL e
+          JOIN POP_EVAL_TYP t ON e.EVAL_GRP_CN = t.EVAL_GRP_CN
+          WHERE e.{state_col} IN ({paste(statecds, collapse=',')})
+            {yr_filter}
+            AND t.{typ_col} = {DBI::dbQuoteString(con, eval_type)}
+        ")
+      }
+      out <- DBI::dbGetQuery(con, sql)
+      if (nrow(out)) return(out)
+      message("   • No rows after eval_type join; falling back to no-type filter.")
+    } else {
+      message("   • POP_EVAL_TYP present but no usable join/type col; skipping type filter.")
+    }
+  } else if (!is.null(eval_type) && nzchar(eval_type)) {
+    message("   • POP_EVAL_TYP not present; skipping type filter.")
+  }
+  
+  DBI::dbGetQuery(con, base_sql)
 }
 
 export_core_slices <- function(con, evalids_df, out_dir) {
