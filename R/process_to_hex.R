@@ -98,17 +98,75 @@ build_plot_aglb <- function(tree_csv, plot_csv) {
   df
 }
 
-# Assign plots to hex grid (expects a hex_id field). Reprojects to EPSG:5070 internally.
 assign_plots_to_hex <- function(df_plots, hex_path, hex_layer = NULL) {
   if (!fs::file_exists(hex_path)) stop("Hex grid not found: ", hex_path)
+  
+  old_s2 <- sf::sf_use_s2(); on.exit(sf::sf_use_s2(old_s2), add = TRUE)
+  sf::sf_use_s2(FALSE)  # GEOS planar; we’ll join in EPSG:5070
+  
+  # ---- Read hex and ensure a 'hex_id' column ----
   hx <- if (is.null(hex_layer)) sf::st_read(hex_path, quiet = TRUE) else sf::st_read(hex_path, layer = hex_layer, quiet = TRUE)
-  if (!("hex_id" %in% names(hx))) { hx$hex_id <- seq_len(nrow(hx)); warning("hex_id missing; created sequential IDs") }
-  hx <- st_make_valid(hx); hx_5070 <- st_transform(hx, 5070)
-  pts <- st_as_sf(df_plots, coords=c("lon_public","lat_public"), crs=4326, remove=FALSE) |>
-    st_transform(5070)
-  j <- st_join(pts, hx_5070["hex_id"], left=TRUE)
-  st_drop_geometry(j) |>
-    as.data.frame()
+  hx <- sf::st_make_valid(sf::st_zm(hx, drop = TRUE, what = "ZM"))
+  if (is.na(sf::st_crs(hx))) sf::st_crs(hx) <- sf::st_crs(4326)
+  
+  # Guarantee a hex_id attribute
+  if (!("hex_id" %in% names(hx))) {
+    if ("ID" %in% names(hx)) {
+      hx <- dplyr::rename(hx, hex_id = ID)
+    } else if ("OBJECTID" %in% names(hx)) {
+      hx <- dplyr::rename(hx, hex_id = OBJECTID)
+    } else {
+      hx$hex_id <- seq_len(nrow(hx))
+      warning("hex_id missing; created sequential IDs")
+    }
+  }
+  
+  # ---- Build points from coords ----
+  dfp <- df_plots |>
+    dplyr::filter(is.finite(lat_public), is.finite(lon_public),
+                  lat_public >= -90, lat_public <= 90,
+                  lon_public >= -180, lon_public <= 180)
+  if (!nrow(dfp)) {
+    warning("No valid coordinates found in df_plots")
+    return(dplyr::mutate(df_plots, hex_id = NA_integer_))
+  }
+  
+  pts <- sf::st_as_sf(dfp, coords = c("lon_public","lat_public"), crs = 4326, remove = FALSE)
+  pts <- sf::st_make_valid(sf::st_zm(pts, drop = TRUE, what = "ZM"))
+  
+  # If points already carry a hex_id from an earlier pass, drop it to avoid .x/.y suffixing
+  if ("hex_id" %in% names(pts)) pts$hex_id <- NULL
+  
+  # ---- Project both to 5070; drop CRS to bypass strict equality test ----
+  crs5070 <- sf::st_crs(5070)
+  hx_5070  <- sf::st_transform(hx,  crs5070)
+  pts_5070 <- sf::st_transform(pts, crs5070)
+  sf::st_crs(hx_5070)  <- NA
+  sf::st_crs(pts_5070) <- NA
+  
+  # ---- Join ----
+  joined <- sf::st_join(pts_5070, hx_5070["hex_id"], left = TRUE, join = sf::st_intersects)
+  out <- sf::st_drop_geometry(joined) |> as.data.frame()
+  
+  # ---- Normalize hex_id column name if suffixed or differently named ----
+  if (!("hex_id" %in% names(out))) {
+    cand <- intersect(c("hex_id.y","hex_id.x","ID","OBJECTID"), names(out))
+    if (length(cand)) {
+      out$hex_id <- out[[cand[1]]]
+      out[cand] <- NULL
+    } else {
+      stop("Join ran but no hex_id column found in result; check hex layer attributes.")
+    }
+  }
+  
+  # quick summary for sanity
+  miss <- sum(is.na(out$hex_id))
+  message(sprintf("• assign_plots_to_hex: matched %s / %s points (%.1f%%), %s NA",
+                  format(nrow(out) - miss, big.mark = ","),
+                  format(nrow(out), big.mark = ","),
+                  100 * (nrow(out) - miss) / nrow(out),
+                  miss))
+  out
 }
 
 # Aggregate to hex in a centered time window on year_label
@@ -129,31 +187,57 @@ aggregate_hex <- function(df, hex_col = "hex_id", year_label, window_years = 3, 
 }
 
 # Monte Carlo positional SD for FIA (jitter public coords)
-positional_mc <- function(df_points, hex_path, hex_layer = NULL, year_label, window_years = 3, R = 100, radius_m = 1609.34) {
-  if (!nrow(df_points)) return(list(replicates=tibble(), summary=tibble()))
+positional_mc <- function(df_points, hex_path, hex_layer = NULL,
+                          year_label, window_years = 3, R = 100, radius_m = 1609.34) {
+  if (!nrow(df_points)) return(list(replicates = dplyr::tibble(), summary = dplyr::tibble()))
+  
+  old_s2 <- sf::sf_use_s2(); on.exit(sf::sf_use_s2(old_s2), add = TRUE)
+  sf::sf_use_s2(FALSE)
+  
+  # Hex
   hx <- if (is.null(hex_layer)) sf::st_read(hex_path, quiet = TRUE) else sf::st_read(hex_path, layer = hex_layer, quiet = TRUE)
-  hx_5070 <- sf::st_transform(sf::st_make_valid(hx), 5070)
-  pts <- sf::st_as_sf(df_points, coords=c("lon_public","lat_public"), crs=4326, remove=FALSE) |>
-    sf::st_transform(5070)
+  if (is.na(sf::st_crs(hx))) sf::st_crs(hx) <- sf::st_crs(4326)
+  hx <- sf::st_make_valid(sf::st_zm(hx, drop = TRUE, what = "ZM"))
+  
+  # Points
+  pts <- sf::st_as_sf(df_points, coords = c("lon_public","lat_public"), crs = 4326, remove = FALSE)
+  pts <- sf::st_make_valid(sf::st_zm(pts, drop = TRUE, what = "ZM"))
+  
+  # Project both to 5070 and drop CRS to avoid equality check
+  crs5070 <- sf::st_crs(5070)
+  hx_5070  <- sf::st_transform(hx,  crs5070)
+  pts_5070 <- sf::st_transform(pts, crs5070)
+  sf::st_crs(hx_5070)  <- NA
+  sf::st_crs(pts_5070) <- NA
+  
   res <- vector("list", R)
   years <- (year_label - floor(window_years/2)):(year_label + floor(window_years/2))
+  
   for (r in seq_len(R)) {
-    u <- runif(nrow(pts)); rr <- sqrt(u)*radius_m; theta <- runif(nrow(pts),0,2*pi)
-    dx <- rr*cos(theta); dy <- rr*sin(theta)
-    pts_j <- sf::st_set_geometry(pts, sf::st_geometry(pts) + cbind(dx,dy))
-    j <- sf::st_join(pts_j, hx_5070["hex_id"], left=TRUE) |> sf::st_drop_geometry()
+    u <- runif(nrow(pts_5070)); rr <- sqrt(u) * radius_m; theta <- runif(nrow(pts_5070), 0, 2*pi)
+    dx <- rr * cos(theta); dy <- rr * sin(theta)
+    pts_j <- sf::st_set_geometry(pts_5070, sf::st_geometry(pts_5070) + cbind(dx, dy))
+    
+    j <- sf::st_join(pts_j, hx_5070["hex_id"], left = TRUE, join = sf::st_intersects) |> sf::st_drop_geometry()
+    # normalize hex_id name
+    if (!("hex_id" %in% names(j))) {
+      cand <- intersect(c("hex_id.y","hex_id.x","ID","OBJECTID"), names(j))
+      if (length(cand)) { j$hex_id <- j[[cand[1]]]; j[cand] <- NULL }
+    }
     g <- j |>
       dplyr::filter(.data$MEASYEAR %in% years) |>
       dplyr::group_by(hex_id) |>
-      dplyr::summarise(mean_rep = mean(aglb_Mg_per_ha, na.rm=TRUE), .groups="drop")
+      dplyr::summarise(mean_rep = mean(aglb_Mg_per_ha, na.rm = TRUE), .groups = "drop")
     g$replicate_id <- r
     res[[r]] <- g
   }
+  
   all <- dplyr::bind_rows(res)
   pos <- all |>
     dplyr::group_by(hex_id) |>
-    dplyr::summarise(positional_sd = stats::sd(mean_rep, na.rm=TRUE), .groups="drop") |>
+    dplyr::summarise(positional_sd = stats::sd(mean_rep, na.rm = TRUE), .groups = "drop") |>
     dplyr::mutate(year_label = year_label, window = paste0(window_years, "y"))
+  
   list(replicates = all, summary = pos)
 }
 
