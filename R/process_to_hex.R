@@ -1,6 +1,11 @@
-#!/usr/bin/env Rscript
-# process_to_hex.R — Build hex-level products from FIA (and optional NEFIN),
-# including FIA positional Monte Carlo; state-safe joins.
+# process_to_hex.R 
+### Foreword ---------------------------------------------------------------------------------
+### Author: Soren Donisvitch
+### Date: 10/02/2025
+### Dependents: R (>= 3.5), DBI, RSQLite, fs, curl, readr, dplyr, glue, withr, jsonlite, rlang
+### Foreword: The use or application of these code without permission of the author is prohibited.The author is not ->
+###           liable for the use, modification, or any other application of this or other provided scripts.
+### Build hex-level products from FIA (and optional NEFIN), including FIA positional Monte Carlo; state-safe joins.
 
 suppressPackageStartupMessages({
   library(sf); library(dplyr); library(readr); library(purrr)
@@ -56,6 +61,17 @@ normalize_plot_coords <- function(pl) {
   pl
 }
 
+write_tbl <- function(df, path, fmt = "parquet", compression = "zstd") {
+  dir.create(dirname(path), showWarnings = FALSE, recursive = TRUE)
+  fmt <- tolower(fmt)
+  if (fmt == "parquet") {
+    if (!requireNamespace("arrow", quietly = TRUE)) stop("Install 'arrow'")
+    arrow::write_parquet(df, path, compression = compression)
+  } else {
+    readr::write_csv(df, path)
+  }
+}
+
 # Fast, practical weighted mean + SE using effective sample size
 w_mean_se <- function(y, w) {
   keep <- is.finite(y) & is.finite(w) & w > 0
@@ -96,6 +112,79 @@ build_plot_aglb <- function(tree_csv, plot_csv) {
     )
   
   df
+}
+
+build_hex_union_5070 <- function(hex_path, hex_layer = NULL) {
+  hx <- if (is.null(hex_layer)) sf::st_read(hex_path, quiet = TRUE) else sf::st_read(hex_path, layer = hex_layer, quiet = TRUE)
+  if (!("hex_id" %in% names(hx))) {
+    if ("ID" %in% names(hx)) hx <- dplyr::rename(hx, hex_id = ID)
+    else if ("OBJECTID" %in% names(hx)) hx <- dplyr::rename(hx, hex_id = OBJECTID)
+    else hx$hex_id <- seq_len(nrow(hx))
+  }
+  hx <- sf::st_make_valid(sf::st_zm(hx, drop = TRUE))
+  sf::st_transform(hx, 5070) |>
+    sf::st_union() |>
+    sf::st_make_valid()
+}
+
+build_state_polys_5070 <- function(state_geo_path, state_field = "STATEFP") {
+  st <- sf::st_read(state_geo_path, quiet = TRUE) |> sf::st_make_valid() |> sf::st_transform(5070)
+  if (!state_field %in% names(st)) stop("state_field not found in state layer: ", state_field)
+  vals <- st[[state_field]]
+  if (is.character(vals)) st$STATECD <- suppressWarnings(as.integer(vals)) else st$STATECD <- as.integer(vals)
+  st[, c("STATECD","geometry")]
+}
+
+constrained_jitter_once <- function(pts_5070, radius_m, hex_union_5070,
+                                    state_polys_5070 = NULL, max_reroll = 20) {
+  n <- nrow(pts_5070); if (!n) return(pts_5070)
+  # first proposal
+  u <- runif(n); r <- sqrt(u) * radius_m; theta <- runif(n, 0, 2*pi)
+  dx <- r * cos(theta); dy <- r * sin(theta)
+  moved <- sf::st_set_geometry(pts_5070, sf::st_geometry(pts_5070) + cbind(dx, dy))
+  
+  inside <- suppressWarnings(sf::st_within(moved, hex_union_5070, sparse = FALSE)[,1])
+  if (!is.null(state_polys_5070) && "STATECD" %in% names(pts_5070)) {
+    st_lut <- split(state_polys_5070, state_polys_5070$STATECD)
+    chk <- logical(n)
+    for (i in seq_len(n)) {
+      poly <- st_lut[[as.character(pts_5070$STATECD[i])]]
+      if (!is.null(poly)) {
+        chk[i] <- as.logical(sf::st_within(moved[i,], poly, sparse = FALSE)[,1])
+      } else chk[i] <- TRUE
+    }
+    inside <- inside & chk
+  }
+  
+  tries <- 1L
+  while (any(!inside) && tries < max_reroll) {
+    idx <- which(!inside)
+    u <- runif(length(idx)); r <- sqrt(u) * radius_m; theta <- runif(length(idx), 0, 2*pi)
+    dx[idx] <- r * cos(theta); dy[idx] <- r * sin(theta)
+    moved[idx, ] <- sf::st_set_geometry(pts_5070[idx, ], sf::st_geometry(pts_5070[idx, ]) + cbind(dx[idx], dy[idx]))
+    inside[idx] <- suppressWarnings(sf::st_within(moved[idx,], hex_union_5070, sparse = FALSE)[,1])
+    if (!is.null(state_polys_5070) && "STATECD" %in% names(pts_5070)) {
+      for (j in seq_along(idx)) {
+        i <- idx[j]
+        poly <- st_lut[[as.character(pts_5070$STATECD[i])]]
+        if (!is.null(poly)) inside[i] <- inside[i] & as.logical(sf::st_within(moved[i,], poly, sparse = FALSE)[,1])
+      }
+    }
+    tries <- tries + 1L
+  }
+  
+  # snap any stragglers to nearest boundary
+  if (any(!inside)) {
+    bad <- which(!inside)
+    for (i in bad) {
+      poly <- if (!is.null(state_polys_5070) && "STATECD" %in% names(pts_5070)) {
+        st_lut[[as.character(pts_5070$STATECD[i])]] |> sf::st_intersection(hex_union_5070)
+      } else hex_union_5070
+      nearest <- sf::st_nearest_points(moved[i,], poly)
+      moved[i,] <- sf::st_set_geometry(moved[i,], sf::st_cast(nearest, "POINT")[2])
+    }
+  }
+  moved
 }
 
 assign_plots_to_hex <- function(df_plots, hex_path, hex_layer = NULL) {
@@ -188,8 +277,18 @@ aggregate_hex <- function(df, hex_col = "hex_id", year_label, window_years = 3, 
 
 # Monte Carlo positional SD for FIA (jitter public coords)
 positional_mc <- function(df_points, hex_path, hex_layer = NULL,
-                          year_label, window_years = 3, R = 100, radius_m = 1609.34) {
+                          year_label, window_years = 3,
+                          R = 100, radius_m = 1609.34,
+                          persist_replicates = FALSE, thin_every = 0L,
+                          out_dir = NULL) {
   if (!nrow(df_points)) return(list(replicates = dplyr::tibble(), summary = dplyr::tibble()))
+  
+  cfg <- read_config("configs/process.yml")
+  use_hex_union <- isTRUE(cfg$mask$use_hex_union)
+  use_state     <- isTRUE(cfg$mask$use_state_constraint)
+  
+  hex_union_5070  <- if (use_hex_union) build_hex_union_5070(hex_path, hex_layer) else NULL
+  state_polys_5070<- if (use_state) build_state_polys_5070(cfg$mask$state_geo_path %||% "", cfg$mask$state_field %||% "STATEFP") else NULL
   
   old_s2 <- sf::sf_use_s2(); on.exit(sf::sf_use_s2(old_s2), add = TRUE)
   sf::sf_use_s2(FALSE)
@@ -210,16 +309,70 @@ positional_mc <- function(df_points, hex_path, hex_layer = NULL,
   sf::st_crs(hx_5070)  <- NA
   sf::st_crs(pts_5070) <- NA
   
-  res <- vector("list", R)
+  if (persist_replicates && thin_every > 0L && !is.null(out_dir)) {
+    dir.create(file.path(out_dir, "replicates"), recursive = TRUE, showWarnings = FALSE)
+  }
+  
   years <- (year_label - floor(window_years/2)):(year_label + floor(window_years/2))
   
+  # If not persisting, keep only streaming stats: n, sum, sumsq
+  if (!persist_replicates) {
+    acc <- dplyr::tibble(hex_id = integer(), n = integer(), sum = double(), sumsq = double())
+    for (r in seq_len(R)) {
+      u <- runif(nrow(pts_5070)); rr <- sqrt(u) * radius_m; theta <- runif(nrow(pts_5070), 0, 2*pi)
+      dx <- rr * cos(theta); dy <- rr * sin(theta)
+      if (!is.null(hex_union_5070) || !is.null(state_polys_5070)) {
+        pts_j <- constrained_jitter_once(pts_5070, radius_m, hex_union_5070, state_polys_5070, max_reroll = as.integer(cfg$mask$max_reroll %||% 20))
+      } else {
+        u <- runif(nrow(pts_5070)); rr <- sqrt(u) * radius_m; theta <- runif(nrow(pts_5070), 0, 2*pi)
+        dx <- rr * cos(theta); dy <- rr * sin(theta)
+        pts_j <- sf::st_set_geometry(pts_5070, sf::st_geometry(pts_5070) + cbind(dx, dy))
+      }
+      
+      j <- sf::st_join(pts_j, hx_5070["hex_id"], left = TRUE, join = sf::st_intersects) |> sf::st_drop_geometry()
+      if (!("hex_id" %in% names(j))) {
+        cand <- intersect(c("hex_id.y","hex_id.x","ID","OBJECTID"), names(j))
+        if (length(cand)) { j$hex_id <- j[[cand[1]]]; j[cand] <- NULL }
+      }
+      g <- j |>
+        dplyr::filter(.data$MEASYEAR %in% years) |>
+        dplyr::group_by(hex_id) |>
+        dplyr::summarise(mean_rep = mean(aglb_Mg_per_ha, na.rm = TRUE), .groups = "drop")
+      
+      acc <- dplyr::full_join(acc, g, by = "hex_id") |>
+        dplyr::mutate(
+          n     = dplyr::coalesce(n, 0L) + 1L,
+          sum   = dplyr::coalesce(sum, 0) + dplyr::coalesce(mean_rep, 0),
+          sumsq = dplyr::coalesce(sumsq, 0) + dplyr::coalesce(mean_rep^2, 0)
+        ) |>
+        dplyr::select(hex_id, n, sum, sumsq)
+      
+      # (optional) write a thinned replicate for QC
+      if (thin_every > 0L && (r %% thin_every == 0L) && !is.null(out_dir)) {
+        g$replicate_id <- r
+        readr::write_csv(g, file.path(out_dir, "replicates", sprintf("rep_%03d.csv", r)))
+      }
+    }
+    
+    out <- acc |>
+      dplyr::mutate(
+        positional_sd = sqrt(pmax(0, sumsq/n - (sum/n)^2)),
+        year_label = year_label,
+        window = paste0(window_years, "y")
+      ) |>
+      dplyr::select(hex_id, positional_sd, year_label, window)
+    
+    return(list(replicates = dplyr::tibble(), summary = out))
+  }
+  
+  # legacy path (persist all replicates in memory)
+  res <- vector("list", R)
   for (r in seq_len(R)) {
     u <- runif(nrow(pts_5070)); rr <- sqrt(u) * radius_m; theta <- runif(nrow(pts_5070), 0, 2*pi)
     dx <- rr * cos(theta); dy <- rr * sin(theta)
     pts_j <- sf::st_set_geometry(pts_5070, sf::st_geometry(pts_5070) + cbind(dx, dy))
     
     j <- sf::st_join(pts_j, hx_5070["hex_id"], left = TRUE, join = sf::st_intersects) |> sf::st_drop_geometry()
-    # normalize hex_id name
     if (!("hex_id" %in% names(j))) {
       cand <- intersect(c("hex_id.y","hex_id.x","ID","OBJECTID"), names(j))
       if (length(cand)) { j$hex_id <- j[[cand[1]]]; j[cand] <- NULL }
@@ -230,6 +383,10 @@ positional_mc <- function(df_points, hex_path, hex_layer = NULL,
       dplyr::summarise(mean_rep = mean(aglb_Mg_per_ha, na.rm = TRUE), .groups = "drop")
     g$replicate_id <- r
     res[[r]] <- g
+    
+    if (thin_every > 0L && (r %% thin_every == 0L) && !is.null(out_dir)) {
+      readr::write_csv(g, file.path(out_dir, "replicates", sprintf("rep_%03d.csv", r)))
+    }
   }
   
   all <- dplyr::bind_rows(res)
@@ -265,6 +422,11 @@ process_to_hex <- function(project_dir = ".",
     runs_dir  = fs::path(project_dir, "runs")
   )
   ensure_dirs(paths)
+  
+  # read optional processing config for thinning/format
+  cfg <- read_config("configs/process.yml")
+  persist_reps <- isTRUE(cfg$persist_replicates %||% FALSE)
+  thin_every   <- as.integer(cfg$thin_every %||% 0L)
   
   # 1) FIA plot-level metric
   fia_plot <- build_plot_aglb(
@@ -309,8 +471,14 @@ process_to_hex <- function(project_dir = ".",
     ) |>
       aggregate_hex(year_label = yr, window_years = level_window, y_col = "aglb_Mg_per_ha") |>
       dplyr::mutate(source = "fused")
-    mc <- positional_mc(fia_plot_hex, hex_path, hex_layer, year_label = yr, window_years = level_window,
-                        R = mc_reps, radius_m = jitter_radius_m)
+    mc <- positional_mc(
+      fia_plot_hex, hex_path, hex_layer,
+      year_label = yr, window_years = level_window,
+      R = mc_reps, radius_m = jitter_radius_m,
+      persist_replicates = persist_reps,
+      thin_every = thin_every,
+      out_dir = out_dir
+    )
     out_pos_sd[[i]] <- mc$summary |> dplyr::mutate(metric = metric)
     out_reps[[i]]   <- mc$replicates |> dplyr::mutate(metric = metric, year_label = yr, window = paste0(level_window,"y"))
     out_design[[i]] <- dplyr::bind_rows(fia_hex_stats, ne_hex_stats, fused_hex_stats) |> dplyr::mutate(metric = metric)
@@ -335,10 +503,15 @@ process_to_hex <- function(project_dir = ".",
   out_dir <- fs::path(paths$runs_dir, run_id); if (!fs::dir_exists(out_dir)) fs::dir_create(out_dir, recurse = TRUE)
   
   readr::write_csv(joined, fs::path(out_dir, "hex_joined.csv"))
-  readr::write_csv(reps,   fs::path(out_dir, "fia_mc_replicates.csv"))
-  
   message("✔ Wrote: ", fs::path(out_dir, "hex_joined.csv"))
-  message("✔ Wrote: ", fs::path(out_dir, "fia_mc_replicates.csv"))
+  
+  if (nrow(reps)) {
+    readr::write_csv(reps, fs::path(out_dir, "fia_mc_replicates.csv"))
+    message("✔ Wrote: ", fs::path(out_dir, "fia_mc_replicates.csv"))
+  } else {
+    message("✔ MC replicates not persisted (see 'replicates/' for thinned samples, if enabled).")
+  }
+  
   invisible(list(hex_joined = fs::path(out_dir, "hex_joined.csv"),
                  fia_mc_replicates = fs::path(out_dir, "fia_mc_replicates.csv"),
                  run_id = run_id))

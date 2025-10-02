@@ -1,11 +1,24 @@
-# configs/process.yml — parameters for process_to_hex.R
 project_dir: "."
 hex_path: "data/hex/hex_grid.geojson"
-hex_layer:
 metric: "aglb"
-years: [2018, 2019, 2020]
+
+# Run only two years for a quick smoke test
+years: [2018, 2019]
+
+# 3-year centered window for level estimates
 level_window: 3
-rate_window: 5
-mc_reps: 25
-jitter_radius_m: 1609.34
-run_id:
+
+# Monte-Carlo (FIA positional fuzz)
+mc_reps: 200
+jitter_radius_m: 1609.34     # ~1 mile
+
+# Thinning / persistence controls
+persist_replicates: false    # don't keep all reps in memory or a single big CSV
+thin_every: 10    
+# domain-aware jitter (OFF for your first run; flip to true when ready)
+mask:
+  use_hex_union: false
+  use_state_constraint: false
+  state_geo_path: "data/boundaries/states_5070.geojson"  # provide if using state constraint
+  state_field: "STATEFP"
+  max_reroll: 20

@@ -1,8 +1,12 @@
-#!/usr/bin/env Rscript
-# fiaDataPull.R — Download FIADB (zipped SQLite), reuse existing unzipped DB if present,
-# unzip then remove the ZIP, and export analysis-ready CSV slices for core tables.
-# Can be sourced by a master script (exports init_project() and fia_pull()) or run via CLI.
-# Requires: DBI, RSQLite, fs, curl, readr, dplyr, glue, withr, jsonlite, rlang
+### Foreword ---------------------------------------------------------------------------------
+### Author: Soren Donisvitch
+### Date: 10/02/2025
+### Dependents: R (>= 3.5), DBI, RSQLite, fs, curl, readr, dplyr, glue, withr, jsonlite, rlang
+### Foreword: The use or application of these code without permission of the author is prohibited.The author is not ->
+###           liable for the use, modification, or any other application of this or other provided scripts.
+### fiaDataPull.R — Download FIADB (zipped SQLite), reuse existing unzipped DB if present,
+### unzip then remove the ZIP, and export analysis-ready CSV slices for core tables.
+### Can be sourced by a master script (exports init_project() and fia_pull()) or run via CLI.
 
 suppressPackageStartupMessages({
   library(DBI); library(RSQLite); library(fs); library(curl)

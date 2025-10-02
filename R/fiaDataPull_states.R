@@ -1,5 +1,10 @@
-#!/usr/bin/env Rscript
 # fiaDataPull_states.R — state-by-state FIADB export with column-aware joins and SQL debug logs
+### Foreword ---------------------------------------------------------------------------------
+### Author: Soren Donisvitch
+### Date: 10/02/2025
+### Dependents: R (>= 3.5), DBI, RSQLite, fs, curl, readr, dplyr, glue, withr, jsonlite, rlang
+### Foreword: The use or application of these code without permission of the author is prohibited.The author is not ->
+###           liable for the use, modification, or any other application of this or other provided scripts.
 
 suppressPackageStartupMessages({
   library(fs); library(yaml); library(dplyr); library(readr); library(glue); library(DBI); library(RSQLite)

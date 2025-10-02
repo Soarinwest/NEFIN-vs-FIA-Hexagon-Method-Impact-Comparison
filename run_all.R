@@ -1,5 +1,12 @@
-#!/usr/bin/env Rscript
-# run_all.R — master runner: init → hex filter → FIA pull (state-by-state or single) → hex processing
+### run_all.R — master runner.R ###
+### Foreword ---------------------------------------------------------------------------------
+### Title: run_all.R
+### Author: Soren Donisvitch
+### Date: 10/02/2025
+### Dependents: R (>= 3.5)
+### Description: run_all.R — master runner: init - hex filter - FIA pull (state-by-state or single) - hex processing
+### Foreword: The use or application of these code without permission of the author is prohibited.The author is not ->
+###           liable for the use, modification, or any other application of this or other provided scripts.
 
 suppressPackageStartupMessages({
   library(fs)
@@ -124,6 +131,12 @@ res <- process_to_hex(
   jitter_radius_m = cfg_proc$jitter_radius_m %||% 1609.34,
   run_id          = cfg_proc$run_id %||% NULL
 )
+
+# --- quick visuals for a smoke test ---
+if (file.exists("R/make_viz.R")) source("R/make_viz.R")
+if (exists("make_run_viz")) {
+  make_run_viz(run_dir = res$run_dir, hex_path = hex_out, years = cfg_proc$years %||% NULL)
+}
 
 # -----------------------------
 # 6) Epilog
