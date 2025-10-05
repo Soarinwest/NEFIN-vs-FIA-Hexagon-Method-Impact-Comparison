@@ -3,6 +3,8 @@ suppressPackageStartupMessages({
   library(sf); library(dplyr); library(readr); library(ggplot2)
 })
 
+`%||%` <- function(a,b) if (!is.null(a)) a else b
+
 # Robust reader for run outputs (CSV or Parquet)
 read_run_tbl <- function(path_base) {
   csv <- paste0(path_base, ".csv")
@@ -19,6 +21,8 @@ read_run_tbl <- function(path_base) {
 plot_hex_var <- function(hx, df, var, title, out_png) {
   brks <- stats::quantile(df[[var]], probs = c(0, .2, .4, .6, .8, 1), na.rm = TRUE)
   df$cut <- cut(df[[var]], include.lowest = TRUE, breaks = unique(brks))
+  hx$hex_id <- as.character(hx$hex_id)
+  df$hex_id <- as.character(df$hex_id)
   g <- hx |>
     left_join(df, by = "hex_id") |>
     ggplot() +
@@ -82,4 +86,4 @@ make_run_viz <- function(run_dir, hex_path, years = NULL) {
   message("✔ Visuals written to: ", viz_dir)
 }
 
-`%||%` <- function(a,b) if (!is.null(a)) a else b
+

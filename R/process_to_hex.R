@@ -21,7 +21,7 @@ read_config <- function(path="configs/process.yml") {
 }
 ensure_dirs <- function(paths) purrr::walk(paths, ~ if (!fs::dir_exists(.x)) fs::dir_create(.x, recurse=TRUE))
 
-# --- helpers to normalize coord columns from PLOT --------------------------------
+# --- helpers --------------------------------
 find_col <- function(df, candidates) {
   # return the first matching column name (case-insensitive), else NA
   up <- toupper(names(df))
@@ -122,6 +122,7 @@ build_hex_union_5070 <- function(hex_path, hex_layer = NULL) {
     else hx$hex_id <- seq_len(nrow(hx))
   }
   hx <- sf::st_make_valid(sf::st_zm(hx, drop = TRUE))
+  hx$hex_id <- as.character(hx$hex_id)
   sf::st_transform(hx, 5070) |>
     sf::st_union() |>
     sf::st_make_valid()
@@ -133,6 +134,38 @@ build_state_polys_5070 <- function(state_geo_path, state_field = "STATEFP") {
   vals <- st[[state_field]]
   if (is.character(vals)) st$STATECD <- suppressWarnings(as.integer(vals)) else st$STATECD <- as.integer(vals)
   st[, c("STATECD","geometry")]
+}
+
+options(dplyr.summarise.inform = TRUE)
+
+dbg_hex <- function(df, tag) {
+  nm <- names(df)
+  message(sprintf("[DBG] %s: %d rows, %d cols", tag, nrow(df), length(nm)))
+  if ("hex_id" %in% nm) {
+    cls <- paste(class(df$hex_id), collapse = "|")
+    sam <- tryCatch(paste(head(unique(df$hex_id), 5), collapse = ", "), error = function(e) "<err>")
+    nas <- sum(is.na(df$hex_id))
+    message(sprintf("       hex_id: class=%s, NA=%d, sample={%s}", cls, nas, sam))
+  } else {
+    message("       hex_id: <MISSING>")
+    cand <- intersect(c("hex_id.x","hex_id.y","ID","OBJECTID","id","HEX_ID","hexid"), nm)
+    if (length(cand)) message("       candidates present: ", paste(cand, collapse=", "))
+  }
+  invisible(df)
+}
+
+ensure_hex_id <- function(df) {
+  nm <- names(df)
+  if (!("hex_id" %in% nm)) {
+    cand <- intersect(c("hex_id.y","hex_id.x","ID","OBJECTID","id","HEX_ID","hexid"), nm)
+    if (length(cand)) {
+      df$hex_id <- df[[cand[1]]]
+    } else {
+      stop("ensure_hex_id: no hex_id nor candidates. Columns: ", paste(nm, collapse=", "))
+    }
+  }
+  df$hex_id <- as.character(df$hex_id)
+  df
 }
 
 constrained_jitter_once <- function(pts_5070, radius_m, hex_union_5070,
@@ -209,6 +242,7 @@ assign_plots_to_hex <- function(df_plots, hex_path, hex_layer = NULL) {
       warning("hex_id missing; created sequential IDs")
     }
   }
+  hx$hex_id <- as.character(hx$hex_id)
   
   # ---- Build points from coords ----
   dfp <- df_plots |>
@@ -217,7 +251,7 @@ assign_plots_to_hex <- function(df_plots, hex_path, hex_layer = NULL) {
                   lon_public >= -180, lon_public <= 180)
   if (!nrow(dfp)) {
     warning("No valid coordinates found in df_plots")
-    return(dplyr::mutate(df_plots, hex_id = NA_integer_))
+    return(dplyr::mutate(df_plots, hex_id = NA_character_))
   }
   
   pts <- sf::st_as_sf(dfp, coords = c("lon_public","lat_public"), crs = 4326, remove = FALSE)
@@ -230,9 +264,7 @@ assign_plots_to_hex <- function(df_plots, hex_path, hex_layer = NULL) {
   crs5070 <- sf::st_crs(5070)
   hx_5070  <- sf::st_transform(hx,  crs5070)
   pts_5070 <- sf::st_transform(pts, crs5070)
-  sf::st_crs(hx_5070)  <- NA
-  sf::st_crs(pts_5070) <- NA
-  
+
   # ---- Join ----
   joined <- sf::st_join(pts_5070, hx_5070["hex_id"], left = TRUE, join = sf::st_intersects)
   out <- sf::st_drop_geometry(joined) |> as.data.frame()
@@ -255,26 +287,40 @@ assign_plots_to_hex <- function(df_plots, hex_path, hex_layer = NULL) {
                   format(nrow(out), big.mark = ","),
                   100 * (nrow(out) - miss) / nrow(out),
                   miss))
-  out
+  # ensure canonical type
+  out$hex_id <- as.character(out$hex_id)
+  return(out)
 }
 
 # Aggregate to hex in a centered time window on year_label
 aggregate_hex <- function(df, hex_col = "hex_id", year_label, window_years = 3, w_col = NULL, y_col) {
+  if (!is.data.frame(df)) stop("aggregate_hex: df must be a data.frame")
+  if (!(hex_col %in% names(df))) df <- ensure_hex_id(df)
+  
   years <- (year_label - floor(window_years/2)):(year_label + floor(window_years/2))
   dfw <- if ("MEASYEAR" %in% names(df)) dplyr::filter(df, .data$MEASYEAR %in% years) else dplyr::filter(df, .data$mid %in% years)
-  if (!nrow(dfw)) return(tibble())
+  if (!nrow(dfw)) return(tibble::tibble())
+  
   dfw$w <- if (!is.null(w_col) && (w_col %in% names(dfw))) dfw[[w_col]] else 1
-  df_group <- dfw |>
-    group_by(.data[[hex_col]]) |>
-    reframe({
+  
+  key <- as.character(dfw[[hex_col]])
+  out <- dfw |>
+    dplyr::mutate(.key = key) |>
+    dplyr::group_by(.key) |>
+    dplyr::reframe({
       m <- w_mean_se(.data[[y_col]], w = w)
-      tibble(mean = m$mean, se = m$se, n_plots = m$n, sum_weight = m$sumw)
+      tibble::tibble(mean = m$mean, se = m$se, n_plots = m$n, sum_weight = m$sumw)
     }) |>
-    ungroup() |>
-    mutate(hex_id = .data[[hex_col]], year_label = year_label, window = paste0(window_years, "y"))
-  df_group
+    dplyr::ungroup() |>
+    dplyr::mutate(
+      hex_id = as.character(.key),
+      year_label = year_label,
+      window = paste0(window_years, "y")
+    ) |>
+    dplyr::select(-.key)
+  
+  out
 }
-
 # Monte Carlo positional SD for FIA (jitter public coords)
 positional_mc <- function(df_points, hex_path, hex_layer = NULL,
                           year_label, window_years = 3,
@@ -298,6 +344,13 @@ positional_mc <- function(df_points, hex_path, hex_layer = NULL,
   if (is.na(sf::st_crs(hx))) sf::st_crs(hx) <- sf::st_crs(4326)
   hx <- sf::st_make_valid(sf::st_zm(hx, drop = TRUE, what = "ZM"))
   
+  if (!("hex_id" %in% names(hx))) {
+    if ("ID" %in% names(hx)) hx <- dplyr::rename(hx, hex_id = ID)
+    else if ("OBJECTID" %in% names(hx)) hx <- dplyr::rename(hx, hex_id = OBJECTID)
+    else hx$hex_id <- seq_len(nrow(hx))
+  }
+  hx$hex_id <- as.character(hx$hex_id)
+  
   # Points
   pts <- sf::st_as_sf(df_points, coords = c("lon_public","lat_public"), crs = 4326, remove = FALSE)
   pts <- sf::st_make_valid(sf::st_zm(pts, drop = TRUE, what = "ZM"))
@@ -309,7 +362,7 @@ positional_mc <- function(df_points, hex_path, hex_layer = NULL,
   sf::st_crs(hx_5070)  <- NA
   sf::st_crs(pts_5070) <- NA
   
-  if (persist_replicates && thin_every > 0L && !is.null(out_dir)) {
+  if (thin_every > 0L && !is.null(out_dir)) {
     dir.create(file.path(out_dir, "replicates"), recursive = TRUE, showWarnings = FALSE)
   }
   
@@ -317,7 +370,7 @@ positional_mc <- function(df_points, hex_path, hex_layer = NULL,
   
   # If not persisting, keep only streaming stats: n, sum, sumsq
   if (!persist_replicates) {
-    acc <- dplyr::tibble(hex_id = integer(), n = integer(), sum = double(), sumsq = double())
+    acc <- dplyr::tibble(hex_id = character(), n = integer(), sum = double(), sumsq = double())
     for (r in seq_len(R)) {
       u <- runif(nrow(pts_5070)); rr <- sqrt(u) * radius_m; theta <- runif(nrow(pts_5070), 0, 2*pi)
       dx <- rr * cos(theta); dy <- rr * sin(theta)
@@ -338,6 +391,8 @@ positional_mc <- function(df_points, hex_path, hex_layer = NULL,
         dplyr::filter(.data$MEASYEAR %in% years) |>
         dplyr::group_by(hex_id) |>
         dplyr::summarise(mean_rep = mean(aglb_Mg_per_ha, na.rm = TRUE), .groups = "drop")
+      
+      g$hex_id <- as.character(g$hex_id)
       
       acc <- dplyr::full_join(acc, g, by = "hex_id") |>
         dplyr::mutate(
@@ -459,6 +514,13 @@ process_to_hex <- function(project_dir = ".",
   out_pos_sd <- vector("list", length(years))
   out_reps <- vector("list", length(years))
   
+  # establish run_id/out_dir BEFORE we call positional_mc()
+  run_id <- run_id %||% cfg$run_id %||%
+    paste0(format(Sys.Date(), "%Y-%m-%d"), "_", metric, "_W", level_window, "y")
+  out_dir <- fs::path(paths$runs_dir, run_id)
+  if (!fs::dir_exists(out_dir)) fs::dir_create(out_dir, recurse = TRUE)
+  message("📁 Output dir: ", out_dir)
+  
   for (i in seq_along(years)) {
     yr <- years[i]
     message(glue("=== Year {yr} ==="))
@@ -484,23 +546,25 @@ process_to_hex <- function(project_dir = ".",
     out_design[[i]] <- dplyr::bind_rows(fia_hex_stats, ne_hex_stats, fused_hex_stats) |> dplyr::mutate(metric = metric)
   }
   
-  design <- dplyr::bind_rows(out_design)
-  pos_sd <- dplyr::bind_rows(out_pos_sd)
-  reps   <- dplyr::bind_rows(out_reps)
+  design <- dplyr::bind_rows(out_design) |> dplyr::mutate(hex_id = as.character(hex_id))
+  pos_sd <- dplyr::bind_rows(out_pos_sd) |> dplyr::mutate(hex_id = as.character(hex_id))
+  reps   <- dplyr::bind_rows(out_reps)   |> dplyr::mutate(hex_id = as.character(hex_id))
   
   design_wide <- design |>
+    dplyr::mutate(hex_id = as.character(hex_id)) |>
     dplyr::select(hex_id, year_label, window, source, metric, mean, se, n_plots, sum_weight) |>
     tidyr::pivot_wider(names_from = source, values_from = c(mean, se, n_plots), names_sep = "_")
   
   joined <- design_wide |>
-    dplyr::left_join(pos_sd |> dplyr::select(hex_id, year_label, window, positional_sd), by = c("hex_id","year_label","window")) |>
+    dplyr::mutate(hex_id = as.character(hex_id)) |>
+    dplyr::left_join(pos_sd |> dplyr::mutate(hex_id = as.character(hex_id)) |>
+                       dplyr::select(hex_id, year_label, window, positional_sd),
+                     by = c("hex_id","year_label","window")) |>
     dplyr::mutate(
       total_sd_fia = sqrt((se_fia %||% NA_real_)^2 + (positional_sd %||% 0)^2),
       se_ratio = dplyr::if_else(is.finite(se_fia) & is.finite(se_fused) & se_fused > 0, se_fia / se_fused, NA_real_)
     )
   
-  run_id <- run_id %||% paste0(format(Sys.Date(), "%Y-%m-%d"), "_", metric, "_W", level_window, "y")
-  out_dir <- fs::path(paths$runs_dir, run_id); if (!fs::dir_exists(out_dir)) fs::dir_create(out_dir, recurse = TRUE)
   
   readr::write_csv(joined, fs::path(out_dir, "hex_joined.csv"))
   message("✔ Wrote: ", fs::path(out_dir, "hex_joined.csv"))

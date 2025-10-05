@@ -17,8 +17,8 @@ persist_replicates: false    # don't keep all reps in memory or a single big CSV
 thin_every: 10    
 # domain-aware jitter (OFF for your first run; flip to true when ready)
 mask:
-  use_hex_union: false
-  use_state_constraint: false
+  use_hex_union: true
+  use_state_constraint: true
   state_geo_path: "data/boundaries/states_5070.geojson"  # provide if using state constraint
   state_field: "STATEFP"
-  max_reroll: 20
+  max_reroll: 10
