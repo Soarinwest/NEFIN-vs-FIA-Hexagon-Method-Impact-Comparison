@@ -171,10 +171,18 @@ ensure_hex_id <- function(df) {
 constrained_jitter_once <- function(pts_5070, radius_m, hex_union_5070,
                                     state_polys_5070 = NULL, max_reroll = 20) {
   n <- nrow(pts_5070); if (!n) return(pts_5070)
+  
+  # Ensure all inputs have identical CRS by forcing them to share one CRS object
+  crs_ref <- sf::st_crs(5070)
+  sf::st_crs(pts_5070) <- crs_ref
+  sf::st_crs(hex_union_5070) <- crs_ref
+  if (!is.null(state_polys_5070)) sf::st_crs(state_polys_5070) <- crs_ref
+  
   # first proposal
   u <- runif(n); r <- sqrt(u) * radius_m; theta <- runif(n, 0, 2*pi)
   dx <- r * cos(theta); dy <- r * sin(theta)
   moved <- sf::st_set_geometry(pts_5070, sf::st_geometry(pts_5070) + cbind(dx, dy))
+  sf::st_crs(moved) <- crs_ref  # Ensure moved also has same CRS
   
   inside <- suppressWarnings(sf::st_within(moved, hex_union_5070, sparse = FALSE)[,1])
   if (!is.null(state_polys_5070) && "STATECD" %in% names(pts_5070)) {
@@ -183,6 +191,7 @@ constrained_jitter_once <- function(pts_5070, radius_m, hex_union_5070,
     for (i in seq_len(n)) {
       poly <- st_lut[[as.character(pts_5070$STATECD[i])]]
       if (!is.null(poly)) {
+        sf::st_crs(poly) <- crs_ref  # Ensure poly has same CRS
         chk[i] <- as.logical(sf::st_within(moved[i,], poly, sparse = FALSE)[,1])
       } else chk[i] <- TRUE
     }
@@ -195,12 +204,17 @@ constrained_jitter_once <- function(pts_5070, radius_m, hex_union_5070,
     u <- runif(length(idx)); r <- sqrt(u) * radius_m; theta <- runif(length(idx), 0, 2*pi)
     dx[idx] <- r * cos(theta); dy[idx] <- r * sin(theta)
     moved[idx, ] <- sf::st_set_geometry(pts_5070[idx, ], sf::st_geometry(pts_5070[idx, ]) + cbind(dx[idx], dy[idx]))
+    sf::st_crs(moved) <- crs_ref  # Reset CRS after geometry changes
+    
     inside[idx] <- suppressWarnings(sf::st_within(moved[idx,], hex_union_5070, sparse = FALSE)[,1])
     if (!is.null(state_polys_5070) && "STATECD" %in% names(pts_5070)) {
       for (j in seq_along(idx)) {
         i <- idx[j]
         poly <- st_lut[[as.character(pts_5070$STATECD[i])]]
-        if (!is.null(poly)) inside[i] <- inside[i] & as.logical(sf::st_within(moved[i,], poly, sparse = FALSE)[,1])
+        if (!is.null(poly)) {
+          sf::st_crs(poly) <- crs_ref
+          inside[i] <- inside[i] & as.logical(sf::st_within(moved[i,], poly, sparse = FALSE)[,1])
+        }
       }
     }
     tries <- tries + 1L
@@ -211,11 +225,16 @@ constrained_jitter_once <- function(pts_5070, radius_m, hex_union_5070,
     bad <- which(!inside)
     for (i in bad) {
       poly <- if (!is.null(state_polys_5070) && "STATECD" %in% names(pts_5070)) {
-        st_lut[[as.character(pts_5070$STATECD[i])]] |> sf::st_intersection(hex_union_5070)
-      } else hex_union_5070
+        p <- st_lut[[as.character(pts_5070$STATECD[i])]] |> sf::st_intersection(hex_union_5070)
+        sf::st_crs(p) <- crs_ref
+        p
+      } else {
+        hex_union_5070
+      }
       nearest <- sf::st_nearest_points(moved[i,], poly)
       moved[i,] <- sf::st_set_geometry(moved[i,], sf::st_cast(nearest, "POINT")[2])
     }
+    sf::st_crs(moved) <- crs_ref  # Final CRS assignment
   }
   moved
 }
@@ -333,8 +352,25 @@ positional_mc <- function(df_points, hex_path, hex_layer = NULL,
   use_hex_union <- isTRUE(cfg$mask$use_hex_union)
   use_state     <- isTRUE(cfg$mask$use_state_constraint)
   
-  hex_union_5070  <- if (use_hex_union) build_hex_union_5070(hex_path, hex_layer) else NULL
-  state_polys_5070<- if (use_state) build_state_polys_5070(cfg$mask$state_geo_path %||% "", cfg$mask$state_field %||% "STATEFP") else NULL
+  old_s2 <- sf::sf_use_s2()
+  on.exit(sf::sf_use_s2(old_s2), add = TRUE)
+  sf::sf_use_s2(FALSE)
+  
+  # Create single CRS reference object
+  crs_ref <- sf::st_crs(5070)
+  
+  # Build hex union and state polys if needed
+  hex_union_5070  <- if (use_hex_union) {
+    hu <- build_hex_union_5070(hex_path, hex_layer)
+    sf::st_crs(hu) <- crs_ref
+    hu
+  } else NULL
+  
+  state_polys_5070 <- if (use_state) {
+    sp <- build_state_polys_5070(cfg$mask$state_geo_path %||% "", cfg$mask$state_field %||% "STATEFP")
+    sf::st_crs(sp) <- crs_ref
+    sp
+  } else NULL
   
   old_s2 <- sf::sf_use_s2(); on.exit(sf::sf_use_s2(old_s2), add = TRUE)
   sf::sf_use_s2(FALSE)
@@ -359,8 +395,7 @@ positional_mc <- function(df_points, hex_path, hex_layer = NULL,
   crs5070 <- sf::st_crs(5070)
   hx_5070  <- sf::st_transform(hx,  crs5070)
   pts_5070 <- sf::st_transform(pts, crs5070)
-  sf::st_crs(hx_5070)  <- NA
-  sf::st_crs(pts_5070) <- NA
+
   
   if (thin_every > 0L && !is.null(out_dir)) {
     dir.create(file.path(out_dir, "replicates"), recursive = TRUE, showWarnings = FALSE)
