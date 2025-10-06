@@ -7,9 +7,8 @@
 ### Description: run_all.R — master runner: init - hex filter - FIA pull (state-by-state or single) - hex processing
 ### Foreword: The use or application of these code without permission of the author is prohibited.The author is not ->
 ###           liable for the use, modification, or any other application of this or other provided scripts.
-
 # run_pipeline.R
-# Master pipeline controller - run only the stages you need
+# Master pipeline controller - run stages individually or together
 
 suppressPackageStartupMessages({
   library(fs); library(yaml)
@@ -17,7 +16,6 @@ suppressPackageStartupMessages({
 
 `%||%` <- function(a,b) if (!is.null(a)) a else b
 
-# Parse command line arguments
 parse_args <- function() {
   args <- commandArgs(trailingOnly = TRUE)
   
@@ -25,9 +23,9 @@ parse_args <- function() {
     init = "--init" %in% args || "--all" %in% args,
     hex_filter = "--hex" %in% args || "--all" %in% args,
     fia_pull = "--fia" %in% args || "--all" %in% args,
-    assign_plots = "--assign" %in% args || "--all" %in% args,
-    jitter_library = "--jitter" %in% args || "--all" %in% args,
-    compute_metrics = "--compute" %in% args || "--all" %in% args
+    assign_plots = "--assign" %in% args || "--all" %in% args || "--cached" %in% args,
+    jitter_library = "--jitter" %in% args || "--all" %in% args || "--cached" %in% args,
+    compute_metrics = "--compute" %in% args || "--all" %in% args || "--cached" %in% args
   )
   
   overwrite <- "--overwrite" %in% args
@@ -45,13 +43,12 @@ safe_source <- function(path) {
   source(path, local = FALSE)
 }
 
-# Main pipeline
 run_pipeline <- function(stages, overwrite = FALSE) {
   
   cat("\n")
-  cat("╔═══════════════════════════════════════════════════════════╗\n")
-  cat("║        FIA-NEFIN Multi-Stage Processing Pipeline         ║\n")
-  cat("╚═══════════════════════════════════════════════════════════╝\n")
+  cat("╔══════════════════════════════════════════════════════════╗\n")
+  cat("║       FIA Multi-Stage Processing Pipeline               ║\n")
+  cat("╚══════════════════════════════════════════════════════════╝\n")
   cat("\n")
   
   # Load configurations
@@ -71,22 +68,22 @@ run_pipeline <- function(stages, overwrite = FALSE) {
     yaml::read_yaml("configs/process.yml")
   } else list()
   
-  # ===== STAGE 0: INIT =====
+  # STAGE 1: INIT
   if (stages$init) {
-    cat("═══════════════════════════════════════════════════════════\n")
-    cat("STAGE 0: Project Initialization\n")
-    cat("═══════════════════════════════════════════════════════════\n")
-    safe_source("R/init_project.R")
+    cat("══════════════════════════════════════════════════════════\n")
+    cat("STAGE 1: Project Initialization\n")
+    cat("══════════════════════════════════════════════════════════\n")
+    safe_source("R/01_init_project.R")
     paths <- init_project(".")
     cat("✓ Project structure initialized\n\n")
   }
   
-  # ===== STAGE 1: HEX FILTER =====
+  # STAGE 2: HEX FILTER
   if (stages$hex_filter) {
-    cat("═══════════════════════════════════════════════════════════\n")
-    cat("STAGE 1: Hex Grid Filtering\n")
-    cat("═══════════════════════════════════════════════════════════\n")
-    safe_source("R/filter_hex_grid.R")
+    cat("══════════════════════════════════════════════════════════\n")
+    cat("STAGE 2: Hex Grid Filtering\n")
+    cat("══════════════════════════════════════════════════════════\n")
+    safe_source("R/02_filter_hex_grid.R")
     
     hex_out <- cfg_hex$out_path %||% "data/hex/hex_grid.geojson"
     
@@ -107,19 +104,19 @@ run_pipeline <- function(stages, overwrite = FALSE) {
     cat("\n")
   }
   
-  # ===== STAGE 2: FIA PULL =====
+  # STAGE 3: FIA PULL
   if (stages$fia_pull) {
-    cat("═══════════════════════════════════════════════════════════\n")
-    cat("STAGE 2: FIA Data Pull\n")
-    cat("═══════════════════════════════════════════════════════════\n")
-    safe_source("R/fiaDataPull.R")
+    cat("══════════════════════════════════════════════════════════\n")
+    cat("STAGE 3: FIA Data Pull\n")
+    cat("══════════════════════════════════════════════════════════\n")
+    safe_source("R/03_fia_pull.R")
     
     if (length(cfg_states) && isTRUE(cfg_states$use_states)) {
-      if (!file.exists("R/fiaDataPull_states.R")) {
-        stop("configs/fia_states.yml requests state-by-state pull, but R/fiaDataPull_states.R is missing.")
+      if (!file.exists("R/03_fia_pull_states.R")) {
+        stop("configs/fia_states.yml requests state-by-state pull, but R/03_fia_pull_states.R is missing.")
       }
       cat("→ Using state-by-state FIA pull\n")
-      safe_source("R/fiaDataPull_states.R")
+      safe_source("R/03_fia_pull_states.R")
       fia_pull_states(project_dir = ".", cfg_path = "configs/fia_states.yml")
     } else {
       cat("→ Using single-bundle FIA pull\n")
@@ -143,14 +140,14 @@ run_pipeline <- function(stages, overwrite = FALSE) {
     cat("\n")
   }
   
-  # ===== STAGE 3: PLOT ASSIGNMENT =====
+  # STAGE 4: PLOT ASSIGNMENT
   if (stages$assign_plots) {
-    cat("═══════════════════════════════════════════════════════════\n")
-    cat("STAGE 3: Plot-to-Hex Assignment (One-Time)\n")
-    cat("═══════════════════════════════════════════════════════════\n")
-    safe_source("R/stage2_assign_plots.R")
+    cat("══════════════════════════════════════════════════════════\n")
+    cat("STAGE 4: Plot-to-Hex Assignment (Cached)\n")
+    cat("══════════════════════════════════════════════════════════\n")
+    safe_source("R/04_assign_plots.R")
     
-    stage2_assign_plots(
+    stage3_assign_plots(
       project_dir = cfg_proc$project_dir %||% ".",
       hex_path = cfg_proc$hex_path %||% "data/hex/hex_grid.geojson",
       hex_layer = cfg_proc$hex_layer %||% NULL,
@@ -159,14 +156,14 @@ run_pipeline <- function(stages, overwrite = FALSE) {
     cat("\n")
   }
   
-  # ===== STAGE 4: JITTER LIBRARY =====
+  # STAGE 5: JITTER LIBRARY
   if (stages$jitter_library) {
-    cat("═══════════════════════════════════════════════════════════\n")
-    cat("STAGE 4: Monte Carlo Jitter Library (One-Time)\n")
-    cat("═══════════════════════════════════════════════════════════\n")
-    safe_source("R/stage3_build_jitter_library.R")
+    cat("══════════════════════════════════════════════════════════\n")
+    cat("STAGE 5: Monte Carlo Jitter Library (Cached)\n")
+    cat("══════════════════════════════════════════════════════════\n")
+    safe_source("R/05_build_jitter_library.R")
     
-    stage3_build_jitter_library(
+    stage4_build_jitter_library(
       project_dir = cfg_proc$project_dir %||% ".",
       hex_path = cfg_proc$hex_path %||% "data/hex/hex_grid.geojson",
       hex_layer = cfg_proc$hex_layer %||% NULL,
@@ -179,12 +176,12 @@ run_pipeline <- function(stages, overwrite = FALSE) {
     cat("\n")
   }
   
-  # ===== STAGE 5: COMPUTE METRICS =====
+  # STAGE 6: COMPUTE METRICS
   if (stages$compute_metrics) {
-    cat("═══════════════════════════════════════════════════════════\n")
-    cat("STAGE 5: Metric Computation (Fast, Reusable)\n")
-    cat("═══════════════════════════════════════════════════════════\n")
-    safe_source("R/stage4_compute_metrics.R")
+    cat("══════════════════════════════════════════════════════════\n")
+    cat("STAGE 6: Metric Computation (Fast!)\n")
+    cat("══════════════════════════════════════════════════════════\n")
+    safe_source("R/06_compute_metrics.R")
     
     years_vec <- if (!is.null(cfg_proc$years)) {
       if (is.list(cfg_proc$years) && length(cfg_proc$years) == 2) {
@@ -192,42 +189,41 @@ run_pipeline <- function(stages, overwrite = FALSE) {
       } else unlist(cfg_proc$years)
     } else 2018:2020
     
-    result <- stage4_compute_metrics(
+    result <- stage5_compute_metrics(
       project_dir = cfg_proc$project_dir %||% ".",
       hex_path = cfg_proc$hex_path %||% "data/hex/hex_grid.geojson",
       hex_layer = cfg_proc$hex_layer %||% NULL,
       metric = cfg_proc$metric %||% "aglb",
       years = years_vec,
       level_window = cfg_proc$level_window %||% 3,
-      run_id = cfg_proc$run_id %||% NULL,
-      metric_params = cfg_proc$metric_params %||% list()
+      run_id = cfg_proc$run_id %||% NULL
     )
     
-    # Visualization
     if (file.exists("R/make_viz.R")) {
       source("R/make_viz.R")
       if (exists("make_run_viz")) {
-        make_run_viz(run_dir = result$run_dir, 
-                     hex_path = cfg_proc$hex_path %||% "data/hex/hex_grid.geojson",
-                     years = years_vec)
+        tryCatch({
+          make_run_viz(run_dir = result$run_dir, 
+                       hex_path = cfg_proc$hex_path %||% "data/hex/hex_grid.geojson",
+                       years = years_vec)
+        }, error = function(e) {
+          message("Visualization skipped: ", e$message)
+        })
       }
     }
     cat("\n")
   }
   
-  cat("═══════════════════════════════════════════════════════════\n")
+  cat("══════════════════════════════════════════════════════════\n")
   cat("✓ Pipeline Complete\n")
-  cat("═══════════════════════════════════════════════════════════\n")
+  cat("══════════════════════════════════════════════════════════\n")
 }
 
 # Execute
 if (identical(environment(), globalenv()) && !length(sys.calls())) {
   args <- parse_args()
   
-  if (args$stages$init || args$stages$hex_filter || args$stages$fia_pull ||
-      args$stages$assign_plots || args$stages$jitter_library || 
-      args$stages$compute_metrics) {
-    
+  if (any(unlist(args$stages))) {
     cat("\nStages to run:\n")
     for (stage in names(args$stages)) {
       if (args$stages[[stage]]) {
@@ -240,23 +236,25 @@ if (identical(environment(), globalenv()) && !length(sys.calls())) {
   } else {
     cat("\nUsage: Rscript run_pipeline.R [options]\n\n")
     cat("Options:\n")
-    cat("  --all            Run all stages\n")
+    cat("  --all            Run all stages (first-time setup)\n")
+    cat("  --cached         Run cached stages (4-6) only\n")
     cat("  --init           Initialize project structure\n")
     cat("  --hex            Filter hex grid\n")
     cat("  --fia            Pull FIA data\n")
-    cat("  --assign         Assign plots to hexes (one-time)\n")
-    cat("  --jitter         Build jitter library (one-time)\n")
-    cat("  --compute        Compute metrics (default if none specified)\n")
-    cat("  --overwrite      Force regeneration of cached stages\n")
+    cat("  --assign         Assign plots to hexes\n")
+    cat("  --jitter         Build jitter library\n")
+    cat("  --compute        Compute metrics (default)\n")
+    cat("  --overwrite      Force regeneration\n")
     cat("\nExamples:\n")
-    cat("  # First-time setup (run stages 0-4)\n")
+    cat("  # First-time full setup:\n")
     cat("  Rscript run_pipeline.R --all\n\n")
-    cat("  # Just compute metrics (fast, uses cache)\n")
-    cat("  Rscript run_pipeline.R --compute\n\n")
-    cat("  # Rebuild jitter library with new parameters\n")
-    cat("  Rscript run_pipeline.R --jitter --overwrite\n\n")
-    cat("  # Compute new metric using existing jitter library\n")
-    cat("  # (edit configs/process.yml to change metric, then:)\n")
+    cat("  # Build cache only (if FIA data already exists):\n")
+    cat("  Rscript run_pipeline.R --cached\n\n")
+    cat("  # Compute metrics (fast, default):\n")
     cat("  Rscript run_pipeline.R --compute\n")
+    cat("  # Or just:\n")
+    cat("  Rscript run_pipeline.R\n\n")
+    cat("  # Rebuild jitter library:\n")
+    cat("  Rscript run_pipeline.R --jitter --overwrite\n")
   }
 }
