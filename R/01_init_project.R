@@ -1,5 +1,5 @@
-#!/usr/bin/env Rscript
-# init_project.R — create a standard folder tree for the FIA/NEFIN project
+# R/01_init_project.R
+# Initialize project directory structure
 
 suppressPackageStartupMessages({ library(fs) })
 
@@ -15,7 +15,8 @@ init_project <- function(project_dir = ".") {
     outputs_tab = fs::path(project_dir, "outputs", "tables"),
     outputs_maps = fs::path(project_dir, "outputs", "maps"),
     logs = fs::path(project_dir, "logs"),
-    configs = fs::path(project_dir, "configs")
+    configs = fs::path(project_dir, "configs"),
+    runs = fs::path(project_dir, "runs")
   )
   lapply(paths, function(p) if (!fs::dir_exists(p)) fs::dir_create(p, recurse=TRUE))
   invisible(paths)

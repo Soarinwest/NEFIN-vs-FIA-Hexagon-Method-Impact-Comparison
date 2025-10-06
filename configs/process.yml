@@ -1,24 +1,27 @@
 project_dir: "."
 hex_path: "data/hex/hex_grid.geojson"
+
+# Choose metric: aglb, carbon, mortality, growth, regeneration
 metric: "aglb"
 
-# Run only two years for a quick smoke test
-years: [2018, 2019]
+# Metric-specific parameters
+metric_params:
+  carbon_fraction: 0.5
+  dbh_sapling: 2.5
+  dbh_tree: 5.0
 
-# 3-year centered window for level estimates
+# Processing years
+years: [2018, 2019, 2020]
 level_window: 3
 
-# Monte-Carlo (FIA positional fuzz)
-mc_reps: 200
-jitter_radius_m: 1609.34     # ~1 mile
+# Monte Carlo settings (used in Stage 4)
+mc_reps: 100              # More reps = better precision, longer Stage 4
+jitter_radius_m: 1609.34  # ~1 mile
 
-# Thinning / persistence controls
-persist_replicates: false    # don't keep all reps in memory or a single big CSV
-thin_every: 10    
-# domain-aware jitter (OFF for your first run; flip to true when ready)
+# Jitter constraints
 mask:
   use_hex_union: true
   use_state_constraint: true
-  state_geo_path: "data/boundaries/states_5070.geojson"  # provide if using state constraint
+  state_geo_path: "data/boundaries/states_5070.geojson"
   state_field: "STATEFP"
   max_reroll: 10
