@@ -25,4 +25,3 @@ mask:
   state_geo_path: "data/boundaries/states_5070.geojson"
   state_field: "STATEFP"
   max_reroll: 10
-  

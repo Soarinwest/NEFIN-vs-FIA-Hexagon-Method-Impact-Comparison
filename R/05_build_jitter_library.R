@@ -5,7 +5,8 @@ suppressPackageStartupMessages({
   library(sf); library(dplyr); library(readr); library(fs); library(yaml); library(glue)
 })
 
-source("R/process_to_hex.R")
+source("R/utils_spatial.R")
+source("R/utils_metrics.R")
 
 `%||%` <- function(a,b) if (!is.null(a)) a else b
 

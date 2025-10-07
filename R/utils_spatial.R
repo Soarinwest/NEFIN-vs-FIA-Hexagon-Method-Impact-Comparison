@@ -143,6 +143,7 @@ constrained_jitter_once <- function(pts_5070, radius_m, hex_union_5070,
   sf::st_crs(hex_union_5070) <- crs_ref
   if (!is.null(state_polys_5070)) sf::st_crs(state_polys_5070) <- crs_ref
   
+  # First proposal - all points
   u <- runif(n); r <- sqrt(u) * radius_m; theta <- runif(n, 0, 2*pi)
   dx <- r * cos(theta); dy <- r * sin(theta)
   moved <- sf::st_set_geometry(pts_5070, sf::st_geometry(pts_5070) + cbind(dx, dy))
@@ -163,15 +164,26 @@ constrained_jitter_once <- function(pts_5070, radius_m, hex_union_5070,
     inside <- inside & chk
   }
   
+  # Re-roll loop - ONLY for failed points
   tries <- 1L
   while (any(!inside) && tries < max_reroll) {
-    idx <- which(!inside)
-    u <- runif(length(idx)); r <- sqrt(u) * radius_m; theta <- runif(length(idx), 0, 2*pi)
-    dx[idx] <- r * cos(theta); dy[idx] <- r * sin(theta)
-    new_geom <- sf::st_geometry(pts_5070[idx, ]) + cbind(dx[idx], dy[idx])
-    moved[idx, ] <- sf::st_set_geometry(pts_5070[idx, ], new_geom)
+    idx <- which(!inside)  # Only the failures
+    
+    # Generate new random offsets ONLY for failed points
+    u <- runif(length(idx))
+    r <- sqrt(u) * radius_m
+    theta <- runif(length(idx), 0, 2*pi)
+    dx[idx] <- r * cos(theta)  # Update offsets only at failed indices
+    dy[idx] <- r * sin(theta)
+    
+    # Update geometry ONLY for failed points
+    geom_to_update <- sf::st_geometry(pts_5070)[idx] + cbind(dx[idx], dy[idx])
+    geom_moved <- sf::st_geometry(moved)
+    geom_moved[idx] <- geom_to_update
+    sf::st_geometry(moved) <- geom_moved
     sf::st_crs(moved) <- crs_ref
     
+    # Check ONLY the re-jittered points
     inside[idx] <- suppressWarnings(sf::st_within(moved[idx,], hex_union_5070, sparse = FALSE)[,1])
     
     if (!is.null(state_polys_5070) && "STATECD" %in% names(pts_5070)) {
@@ -187,6 +199,7 @@ constrained_jitter_once <- function(pts_5070, radius_m, hex_union_5070,
     tries <- tries + 1L
   }
   
+  # Final snap for any remaining failures
   if (any(!inside)) {
     bad <- which(!inside)
     for (i in bad) {
@@ -203,7 +216,9 @@ constrained_jitter_once <- function(pts_5070, radius_m, hex_union_5070,
         hex_union_5070
       }
       nearest <- sf::st_nearest_points(moved[i,], poly)
-      moved[i,] <- sf::st_set_geometry(moved[i,], sf::st_cast(nearest, "POINT")[2])
+      geom_moved <- sf::st_geometry(moved)
+      geom_moved[i] <- sf::st_cast(nearest, "POINT")[2]
+      sf::st_geometry(moved) <- geom_moved
     }
     sf::st_crs(moved) <- crs_ref
   }

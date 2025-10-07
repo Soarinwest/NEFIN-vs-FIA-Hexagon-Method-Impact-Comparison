@@ -10,8 +10,7 @@ suppressPackageStartupMessages({
   library(fs); library(yaml); library(dplyr); library(readr); library(glue); library(DBI); library(RSQLite)
 })
 
-# We rely on helpers from fiaDataPull.R (init_project, ensure_fiadb_sqlite, abbr_to_statecd, etc.)
-source("R/fiaDataPull.R")
+source("R/03_fia_pull.R")
 
 `%||%` <- function(a,b) if (!is.null(a)) a else b
 dir_create_safe <- function(p) if (!fs::dir_exists(p)) fs::dir_create(p, recurse=TRUE)

@@ -147,7 +147,7 @@ run_pipeline <- function(stages, overwrite = FALSE) {
     cat("══════════════════════════════════════════════════════════\n")
     safe_source("R/04_assign_plots.R")
     
-    stage3_assign_plots(
+    stage2_assign_plots(
       project_dir = cfg_proc$project_dir %||% ".",
       hex_path = cfg_proc$hex_path %||% "data/hex/hex_grid.geojson",
       hex_layer = cfg_proc$hex_layer %||% NULL,
@@ -163,7 +163,7 @@ run_pipeline <- function(stages, overwrite = FALSE) {
     cat("══════════════════════════════════════════════════════════\n")
     safe_source("R/05_build_jitter_library.R")
     
-    stage4_build_jitter_library(
+    stage3_build_jitter_library(
       project_dir = cfg_proc$project_dir %||% ".",
       hex_path = cfg_proc$hex_path %||% "data/hex/hex_grid.geojson",
       hex_layer = cfg_proc$hex_layer %||% NULL,
@@ -189,7 +189,7 @@ run_pipeline <- function(stages, overwrite = FALSE) {
       } else unlist(cfg_proc$years)
     } else 2018:2020
     
-    result <- stage5_compute_metrics(
+    result <- stage4_compute_metrics(
       project_dir = cfg_proc$project_dir %||% ".",
       hex_path = cfg_proc$hex_path %||% "data/hex/hex_grid.geojson",
       hex_layer = cfg_proc$hex_layer %||% NULL,
