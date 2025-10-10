@@ -28,7 +28,7 @@ stage4_compute_metrics <- function(project_dir = ".",
     stop("Run stage2_assign_plots.R first. Missing: ", assignments_file)
   }
   if (!fs::dir_exists(jitter_dir) || !fs::file_exists(jitter_manifest)) {
-    stop("Run stage3_build_jitter_library.R first. Missing jitter library in: ", jitter_dir)
+    stop("Run stage4_build_jitter_library.R first. Missing jitter library in: ", jitter_dir)
   }
   
   jitter_meta <- yaml::read_yaml(jitter_manifest)

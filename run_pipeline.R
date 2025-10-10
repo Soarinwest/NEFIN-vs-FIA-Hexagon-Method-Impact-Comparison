@@ -163,15 +163,14 @@ run_pipeline <- function(stages, overwrite = FALSE) {
     cat("══════════════════════════════════════════════════════════\n")
     safe_source("R/05_build_jitter_library.R")
     
-    stage3_build_jitter_library(
+    stage4_build_jitter_library(
       project_dir = cfg_proc$project_dir %||% ".",
       hex_path = cfg_proc$hex_path %||% "data/hex/hex_grid.geojson",
       hex_layer = cfg_proc$hex_layer %||% NULL,
       n_replicates = cfg_proc$mc_reps %||% 100,
       radius_m = cfg_proc$jitter_radius_m %||% 1609.34,
       use_constraints = TRUE,
-      overwrite = overwrite,
-      format = "parquet"
+      overwrite = overwrite
     )
     cat("\n")
   }
