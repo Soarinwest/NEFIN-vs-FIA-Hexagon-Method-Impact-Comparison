@@ -1,5 +1,6 @@
-#R/stage4_compute_metrics.R
+# R/06_compute_metrics.R
 # Fast metric computation using pre-generated jitter library
+# UPDATED: Works with partial jitter libraries, uses pre-computed hex assignments
 
 suppressPackageStartupMessages({
   library(sf); library(dplyr); library(readr); library(fs); library(yaml); 
@@ -32,10 +33,24 @@ stage4_compute_metrics <- function(project_dir = ".",
   }
   
   jitter_meta <- yaml::read_yaml(jitter_manifest)
+  
+  # Check how many replicates actually exist
+  reps_dir <- fs::path(jitter_dir, "replicates")
+  rep_files <- list.files(reps_dir, pattern = "^rep_\\d{4}\\.csv$")
+  n_available <- length(rep_files)
+  
+  if (n_available == 0) {
+    stop("No replicate files found in: ", reps_dir)
+  }
+  
   message("→ Using jitter library:")
   message("    Created: ", jitter_meta$created)
-  message("    Replicates: ", jitter_meta$n_replicates)
-  message("    Format: ", jitter_meta$format)
+  message("    Expected replicates: ", jitter_meta$n_replicates)
+  message("    Available replicates: ", n_available)
+  if (n_available < jitter_meta$n_replicates) {
+    message("    ⚠ Using partial library (", n_available, " of ", 
+            jitter_meta$n_replicates, " replicates)")
+  }
   
   metric_col <- switch(tolower(metric),
                        "aglb" = "aglb_Mg_per_ha",
@@ -95,9 +110,7 @@ stage4_compute_metrics <- function(project_dir = ".",
       jitter_meta = jitter_meta,
       year_label = yr,
       window_years = level_window,
-      metric_col = metric_col,
-      hex_path = hex_path,
-      hex_layer = hex_layer
+      metric_col = metric_col
     )
     
     out_design[[i]] <- fia_hex_stats |> dplyr::mutate(metric = metric)
@@ -108,7 +121,7 @@ stage4_compute_metrics <- function(project_dir = ".",
   pos_sd <- dplyr::bind_rows(out_pos_sd) |> dplyr::mutate(hex_id = as.character(hex_id))
   
   joined <- design |>
-    dplyr::left_join(pos_sd |> dplyr::select(hex_id, year_label, window, positional_sd),
+    dplyr::left_join(pos_sd |> dplyr::select(hex_id, year_label, window, positional_sd, n_reps),
                      by = c("hex_id", "year_label", "window")) |>
     dplyr::mutate(
       total_sd = sqrt(se^2 + dplyr::coalesce(positional_sd, 0)^2)
@@ -125,70 +138,75 @@ stage4_compute_metrics <- function(project_dir = ".",
   ))
 }
 
+# FIXED: Use pre-computed hex_id_jittered, no spatial operations!
 compute_positional_sd_from_library <- function(fia_with_hex, jitter_dir, jitter_meta,
-                                               year_label, window_years, metric_col,
-                                               hex_path, hex_layer = NULL) {
+                                               year_label, window_years, metric_col) {
   
   message("  Computing positional SD from jitter library...")
   
-  jitter_file <- fs::path(jitter_dir, jitter_meta$file)
-  if (jitter_meta$format == "parquet") {
-    jitters <- arrow::read_parquet(jitter_file)
-  } else {
-    jitters <- readr::read_csv(jitter_file, show_col_types = FALSE)
+  # Read ALL available replicate CSVs
+  reps_dir <- fs::path(jitter_dir, "replicates")
+  rep_files <- list.files(reps_dir, pattern = "^rep_\\d{4}\\.csv$", full.names = TRUE)
+  
+  if (!length(rep_files)) {
+    stop("No replicate files found in: ", reps_dir)
   }
   
-  message("    Loaded ", nrow(jitters), " jittered coordinates")
+  message("    Loading ", length(rep_files), " replicate files...")
+  jitters <- dplyr::bind_rows(lapply(rep_files, function(f) {
+    suppressMessages(readr::read_csv(f, show_col_types = FALSE))
+  }))
   
+  message("    Loaded ", format(nrow(jitters), big.mark = ","), " jittered coordinates")
+  
+  # Verify hex_id_jittered column exists
+  if (!("hex_id_jittered" %in% names(jitters))) {
+    stop("Jitter library missing hex_id_jittered column! Re-run Stage 5.")
+  }
+  
+  # Filter to analysis window
   years <- (year_label - floor(window_years/2)):(year_label + floor(window_years/2))
   fia_year <- fia_with_hex |> dplyr::filter(MEASYEAR %in% years)
   
   if (!nrow(fia_year)) {
     return(dplyr::tibble(hex_id = character(), positional_sd = numeric(), 
-                         year_label = integer(), window = character()))
+                         year_label = integer(), window = character(), n_reps = integer()))
   }
   
-  old_s2 <- sf::sf_use_s2()
-  on.exit(sf::sf_use_s2(old_s2), add = TRUE)
-  sf::sf_use_s2(FALSE)
-  
-  hx <- if (is.null(hex_layer)) sf::st_read(hex_path, quiet = TRUE) else sf::st_read(hex_path, layer = hex_layer, quiet = TRUE)
-  if (!("hex_id" %in% names(hx))) {
-    if ("ID" %in% names(hx)) hx <- dplyr::rename(hx, hex_id = ID)
-    else if ("OBJECTID" %in% names(hx)) hx <- dplyr::rename(hx, hex_id = OBJECTID)
-    else hx$hex_id <- seq_len(nrow(hx))
-  }
-  hx$hex_id <- as.character(hx$hex_id)
-  hx_5070 <- sf::st_transform(hx, 5070)
-  
-  n_reps <- jitter_meta$n_replicates
-  rep_results <- vector("list", n_reps)
+  # Get unique replicate IDs from actual data
+  rep_ids <- sort(unique(jitters$replicate_id))
+  n_reps <- length(rep_ids)
   
   message("    Processing ", n_reps, " replicates...")
-  for (r in seq_len(n_reps)) {
+  rep_results <- vector("list", n_reps)
+  
+  for (idx in seq_along(rep_ids)) {
+    r <- rep_ids[idx]
+    
+    # Filter jitter data for this replicate
     jitter_r <- jitters |> dplyr::filter(replicate_id == r)
     
+    # Join FIA data with jittered hex assignments
+    # KEY: Use pre-computed hex_id_jittered, NO spatial operations!
     data_r <- fia_year |>
-      dplyr::inner_join(jitter_r |> dplyr::select(CN, STATECD, lon_jittered, lat_jittered),
-                        by = c("CN", "STATECD"))
+      dplyr::inner_join(
+        jitter_r |> dplyr::select(CN, STATECD, hex_id_jittered),
+        by = c("CN", "STATECD")
+      )
     
-    pts_r <- sf::st_as_sf(data_r, coords = c("lon_jittered", "lat_jittered"), 
-                          crs = 4326, remove = FALSE)
-    pts_r_5070 <- sf::st_transform(pts_r, 5070)
-    
-    joined_r <- sf::st_join(pts_r_5070, hx_5070["hex_id"], left = TRUE, join = sf::st_intersects) |>
-      sf::st_drop_geometry()
-    
-    hex_mean_r <- joined_r |>
-      dplyr::group_by(hex_id) |>
+    # Compute hex means using JITTERED hex assignments
+    hex_mean_r <- data_r |>
+      dplyr::group_by(hex_id_jittered) |>
       dplyr::summarise(mean_rep = mean(.data[[metric_col]], na.rm = TRUE), .groups = "drop") |>
+      dplyr::rename(hex_id = hex_id_jittered) |>
       dplyr::mutate(replicate_id = r)
     
-    rep_results[[r]] <- hex_mean_r
+    rep_results[[idx]] <- hex_mean_r
   }
   
   all_reps <- dplyr::bind_rows(rep_results)
   
+  # Compute positional SD across replicates
   pos_sd <- all_reps |>
     dplyr::group_by(hex_id) |>
     dplyr::summarise(

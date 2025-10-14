@@ -1,5 +1,51 @@
+# configs/process.yml (UPDATED)
+# Main processing configuration with multi-grid support
+
 project_dir: "."
+
+# Multiple hex grids for multi-scale analysis
+# Each jittered point will be assigned to ALL grids
+hex_grids:
+  - name: "fia"
+    path: "data/hex/hex_grid.geojson"
+    layer: null
+    
+  - name: "1.5k"
+    path: "data/hex/hex_grid_1.5kac.geojson"
+    layer: null
+    
+  - name: "3k"
+    path: "data/hex/hex_grid_3kac.geojson"
+    layer: null
+    
+  - name: "6k"
+    path: "data/hex/hex_grid_6kac.geojson"
+    layer: null
+
+# Default grid for initial plot assignment (use FIA official or finest)
 hex_path: "data/hex/hex_grid.geojson"
+hex_layer: null
+
+# Multiple hex grid sizes (for creating new grids)
+# Note: FIA official grid already exists, only create custom sizes
+hex_sizes:
+  - area_acres: 1500
+    clip_to: "data/hex/hex_grid.geojson"
+    out_path: "data/hex/hex_grid_1.5kac.geojson"
+    exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
+    buffer_miles: 5
+    
+  - area_acres: 3000
+    clip_to: "data/hex/hex_grid.geojson"
+    out_path: "data/hex/hex_grid_3kac.geojson"
+    exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
+    buffer_miles: 5
+  
+  - area_acres: 6000
+    clip_to: "data/hex/hex_grid.geojson"
+    out_path: "data/hex/hex_grid_6kac.geojson"
+    exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
+    buffer_miles: 5
 
 # Choose metric: aglb, carbon, mortality, growth, regeneration
 metric: "aglb"
@@ -14,8 +60,8 @@ metric_params:
 years: [2018, 2019, 2020]
 level_window: 3
 
-# Monte Carlo settings (used in Stage 4)
-mc_reps: 100              # More reps = better precision, longer Stage 4
+# Monte Carlo settings (used in Stage 5)
+mc_reps: 100              # Number of jitter replicates
 jitter_radius_m: 1609.34  # ~1 mile
 
 # Jitter constraints
@@ -25,3 +71,6 @@ mask:
   state_geo_path: "data/boundaries/states_5070.geojson"
   state_field: "STATEFP"
   max_reroll: 10
+
+# Run ID (auto-generated if null)
+run_id: null

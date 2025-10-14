@@ -1,5 +1,5 @@
-# R/05_build_jitter_library.R
-# Pre-generate N jittered coordinate sets with hex assignment and incremental saving
+# R/05_build_jitter_library.R (MULTI-SCALE)
+# Pre-generate N jittered coordinate sets with MULTIPLE hex grid assignments
 
 suppressPackageStartupMessages({
   library(sf); library(dplyr); library(readr); library(fs); library(yaml); library(glue)
@@ -10,8 +10,7 @@ source("R/utils_spatial.R")
 `%||%` <- function(a,b) if (!is.null(a)) a else b
 
 stage4_build_jitter_library <- function(project_dir = ".",
-                                        hex_path = "data/hex/hex_grid.geojson",
-                                        hex_layer = NULL,
+                                        hex_grids = NULL,  # List of hex grid specs
                                         n_replicates = 100,
                                         radius_m = 1609.34,
                                         use_constraints = TRUE,
@@ -26,13 +25,53 @@ stage4_build_jitter_library <- function(project_dir = ".",
   replicates_dir <- fs::path(out_dir, "replicates")
   manifest_file <- fs::path(out_dir, "manifest.yml")
   
+  # Load config to get hex grids if not provided
+  cfg <- if (file.exists("configs/process.yml")) {
+    yaml::read_yaml("configs/process.yml")
+  } else list()
+  
+  if (is.null(hex_grids)) {
+    hex_grids <- cfg$hex_grids
+    if (is.null(hex_grids)) {
+      stop("No hex_grids specified. Set in function call or configs/process.yml")
+    }
+  }
+  
+  # Validate hex grids
+  for (i in seq_along(hex_grids)) {
+    grid <- hex_grids[[i]]
+    if (is.null(grid$name)) stop("hex_grids[[", i, "]] missing 'name'")
+    if (is.null(grid$path)) stop("hex_grids[[", i, "]] missing 'path'")
+    if (!fs::file_exists(grid$path)) {
+      stop("Hex grid not found: ", grid$path, "\n  Run --create-hex first!")
+    }
+  }
+  
+  grid_names <- sapply(hex_grids, function(x) x$name)
+  message("→ Multi-scale jitter library with ", length(hex_grids), " hex grids:")
+  for (grid in hex_grids) {
+    message("    ", grid$name, ": ", grid$path)
+  }
+  
   # Check for existing library
   if (fs::dir_exists(out_dir) && fs::file_exists(manifest_file) && !overwrite) {
     manifest <- yaml::read_yaml(manifest_file)
+    
+    # Check if grids match
+    existing_grids <- sapply(manifest$hex_grids, function(x) x$name)
+    if (!setequal(existing_grids, grid_names)) {
+      message("⚠ Existing library has different hex grids:")
+      message("    Existing: ", paste(existing_grids, collapse = ", "))
+      message("    Requested: ", paste(grid_names, collapse = ", "))
+      message("  Use overwrite=TRUE to regenerate")
+      stop("Hex grid mismatch")
+    }
+    
     message("✓ Jitter library already exists:")
     message("    Created: ", manifest$created)
     message("    Replicates: ", manifest$n_replicates)
     message("    Plots: ", manifest$n_plots)
+    message("    Hex grids: ", paste(existing_grids, collapse = ", "))
     message("  Use overwrite=TRUE to regenerate")
     return(invisible(out_dir))
   }
@@ -52,10 +91,6 @@ stage4_build_jitter_library <- function(project_dir = ".",
   
   if (!nrow(valid_plots)) stop("No valid plots to jitter!")
   
-  cfg <- if (file.exists("configs/process.yml")) {
-    yaml::read_yaml("configs/process.yml")
-  } else list()
-  
   use_hex_union <- use_constraints && isTRUE(cfg$mask$use_hex_union)
   use_state <- use_constraints && isTRUE(cfg$mask$use_state_constraint)
   
@@ -66,9 +101,11 @@ stage4_build_jitter_library <- function(project_dir = ".",
   
   crs_ref <- sf::st_crs(5070)
   
+  # Use FIRST (finest) grid for constraint boundary
+  first_grid <- hex_grids[[1]]
   hex_union_5070 <- if (use_hex_union) {
-    message("  Building hex union for jitter constraints...")
-    hu <- build_hex_union_5070(hex_path, hex_layer)
+    message("  Building hex union for jitter constraints (using ", first_grid$name, ")...")
+    hu <- build_hex_union_5070(first_grid$path, first_grid$layer)
     sf::st_crs(hu) <- crs_ref
     hu
   } else NULL
@@ -81,24 +118,30 @@ stage4_build_jitter_library <- function(project_dir = ".",
     sp
   } else NULL
   
-  # Read hex grid for spatial joins
-  message("→ Reading hex grid for assignment...")
-  hx <- if (is.null(hex_layer)) {
-    sf::st_read(hex_path, quiet = TRUE)
-  } else {
-    sf::st_read(hex_path, layer = hex_layer, quiet = TRUE)
-  }
+  # Load ALL hex grids for assignment
+  message("→ Loading all hex grids for multi-scale assignment...")
+  hex_grids_sf <- lapply(hex_grids, function(grid) {
+    message("    Loading ", grid$name, "...")
+    hx <- if (is.null(grid$layer)) {
+      sf::st_read(grid$path, quiet = TRUE)
+    } else {
+      sf::st_read(grid$path, layer = grid$layer, quiet = TRUE)
+    }
+    
+    if (!("hex_id" %in% names(hx))) {
+      if ("ID" %in% names(hx)) hx <- dplyr::rename(hx, hex_id = ID)
+      else if ("OBJECTID" %in% names(hx)) hx <- dplyr::rename(hx, hex_id = OBJECTID)
+      else hx$hex_id <- seq_len(nrow(hx))
+    }
+    hx$hex_id <- as.character(hx$hex_id)
+    hx <- sf::st_make_valid(sf::st_zm(hx, drop = TRUE, what = "ZM"))
+    hx_5070 <- sf::st_transform(hx, crs_ref)
+    sf::st_crs(hx_5070) <- crs_ref
+    
+    list(name = grid$name, sf = hx_5070)
+  })
   
-  if (!("hex_id" %in% names(hx))) {
-    if ("ID" %in% names(hx)) hx <- dplyr::rename(hx, hex_id = ID)
-    else if ("OBJECTID" %in% names(hx)) hx <- dplyr::rename(hx, hex_id = OBJECTID)
-    else hx$hex_id <- seq_len(nrow(hx))
-  }
-  hx$hex_id <- as.character(hx$hex_id)
-  hx <- sf::st_make_valid(sf::st_zm(hx, drop = TRUE, what = "ZM"))
-  hx_5070 <- sf::st_transform(hx, crs_ref)
-  
-  message("→ Converting to spatial points (once)...")
+  message("→ Converting plots to spatial points (once)...")
   pts <- sf::st_as_sf(valid_plots, 
                       coords = c("lon_original", "lat_original"), 
                       crs = 4326, remove = FALSE)
@@ -130,8 +173,9 @@ stage4_build_jitter_library <- function(project_dir = ".",
   if (length(remaining) == 0) {
     message("✓ All replicates already complete!")
   } else {
-    message(sprintf("→ Generating %d jittered coordinate sets...", length(remaining)))
-    message("  Each replicate: jitter → assign hex → save CSV")
+    message(sprintf("→ Generating %d jittered coordinate sets with %d hex grids...", 
+                    length(remaining), length(hex_grids)))
+    message("  Each replicate: jitter → assign to ALL grids → save CSV")
     
     start_time <- Sys.time()
     report_every <- max(1, floor(length(remaining) / 10))
@@ -168,36 +212,36 @@ stage4_build_jitter_library <- function(project_dir = ".",
         sf::st_crs(pts_j) <- crs_ref
       }
       
-      # CRITICAL: Assign jittered points to hexes (may be different hex!)
-      joined <- sf::st_join(pts_j, hx_5070["hex_id"], left = TRUE, join = sf::st_intersects)
+      # CRITICAL: Assign jittered points to ALL hex grids
+      rep_data <- sf::st_drop_geometry(pts_j) |>
+        dplyr::select(CN, STATECD, MEASYEAR, UNITCD, COUNTYCD, PLOT) |>
+        dplyr::mutate(replicate_id = r)
       
-      # Handle potential duplicate hex_id columns from join
-      if ("hex_id.y" %in% names(joined)) {
-        joined <- joined |>
-          dplyr::mutate(hex_id_jittered = hex_id.y) |>
-          dplyr::select(-hex_id.y, -hex_id.x)
-      } else if ("hex_id.x" %in% names(joined)) {
-        joined <- joined |>
-          dplyr::mutate(hex_id_jittered = hex_id.x) |>
-          dplyr::select(-hex_id.x)
-      } else {
-        joined <- joined |>
-          dplyr::mutate(hex_id_jittered = hex_id)
+      for (grid_info in hex_grids_sf) {
+        grid_name <- grid_info$name
+        grid_sf <- grid_info$sf
+        
+        # Spatial join for this grid
+        joined <- sf::st_join(pts_j, grid_sf["hex_id"], left = TRUE, join = sf::st_intersects)
+        
+        # Extract hex_id for this grid
+        hex_col_name <- paste0("hex_id_", grid_name)
+        
+        if ("hex_id.y" %in% names(joined)) {
+          rep_data[[hex_col_name]] <- joined$hex_id.y
+        } else if ("hex_id.x" %in% names(joined)) {
+          rep_data[[hex_col_name]] <- joined$hex_id.x
+        } else {
+          rep_data[[hex_col_name]] <- joined$hex_id
+        }
       }
       
       # Extract jittered coordinates back to lat/lon
-      pts_j_4326 <- sf::st_transform(joined, 4326)
+      pts_j_4326 <- sf::st_transform(pts_j, 4326)
       coords_j <- sf::st_coordinates(pts_j_4326)
       
-      # Create replicate data (NO GEOMETRY - just tabular CSV)
-      rep_data <- sf::st_drop_geometry(pts_j_4326) |>
-        dplyr::select(CN, STATECD, MEASYEAR, UNITCD, COUNTYCD, PLOT, hex_id_jittered) |>
-        dplyr::mutate(
-          replicate_id = r,
-          lon_jittered = coords_j[, 1],
-          lat_jittered = coords_j[, 2]
-        ) |>
-        as.data.frame()
+      rep_data$lon_jittered <- coords_j[, 1]
+      rep_data$lat_jittered <- coords_j[, 2]
       
       # Save this replicate as CSV
       rep_file <- fs::path(replicates_dir, sprintf("rep_%04d.csv", r))
@@ -218,17 +262,23 @@ stage4_build_jitter_library <- function(project_dir = ".",
     constrained = use_constraints,
     used_hex_union = !is.null(hex_union_5070),
     used_state_constraint = !is.null(state_polys_5070),
+    hex_grids = lapply(hex_grids, function(g) list(name = g$name, path = g$path)),
     replicates_dir = "replicates",
     columns = c("CN", "STATECD", "MEASYEAR", "UNITCD", "COUNTYCD", "PLOT", 
-                "hex_id_jittered", "replicate_id", "lon_jittered", "lat_jittered")
+                paste0("hex_id_", grid_names),
+                "replicate_id", "lon_jittered", "lat_jittered")
   )
   
   yaml::write_yaml(manifest, manifest_file)
   message("✓ Wrote: ", manifest_file)
   
-  message("\n=== Jitter Library Summary ===")
+  message("\n=== Multi-Scale Jitter Library Summary ===")
   message("  Replicates:     ", n_replicates)
   message("  Plots per rep:  ", nrow(valid_plots))
+  message("  Hex grids:      ", length(hex_grids))
+  for (grid in hex_grids) {
+    message("    - ", grid$name, " (", grid$path, ")")
+  }
   message("  Format:         CSV (individual files)")
   message("  Location:       ", replicates_dir)
   message("  Constrained:    ", use_constraints)
@@ -252,8 +302,7 @@ if (identical(environment(), globalenv()) && !length(sys.calls())) {
   
   stage4_build_jitter_library(
     project_dir = cfg$project_dir %||% ".",
-    hex_path = cfg$hex_path %||% "data/hex/hex_grid.geojson",
-    hex_layer = cfg$hex_layer %||% NULL,
+    hex_grids = cfg$hex_grids,  # Load from config
     n_replicates = cfg$mc_reps %||% 100,
     radius_m = cfg$jitter_radius_m %||% 1609.34,
     use_constraints = TRUE,
