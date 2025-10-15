@@ -1,6 +1,5 @@
 # R/06_compute_metrics.R
 # Fast metric computation using pre-generated jitter library
-# UPDATED: Works with partial jitter libraries, uses pre-computed hex assignments
 
 suppressPackageStartupMessages({
   library(sf); library(dplyr); library(readr); library(fs); library(yaml); 
@@ -13,6 +12,7 @@ source("R/utils_metrics.R")
 `%||%` <- function(a,b) if (!is.null(a)) a else b
 
 stage4_compute_metrics <- function(project_dir = ".",
+                                   hex_grid_name = NULL,    # NEW: which grid to process
                                    hex_path = "data/hex/hex_grid.geojson",
                                    hex_layer = NULL,
                                    metric = "aglb",
@@ -77,9 +77,30 @@ stage4_compute_metrics <- function(project_dir = ".",
   message("→ Joining with hex assignments...")
   assignments <- readr::read_csv(assignments_file, show_col_types = FALSE)
   
+  # Auto-detect hex_id column name (hex_id, hex_id_fia, etc.)
+  hex_col_candidates <- c("hex_id", "hex_id_fia", "hex_id_1.5k", "hex_id_3k", "hex_id_6k")
+  hex_col <- NULL
+  for (candidate in hex_col_candidates) {
+    if (candidate %in% names(assignments)) {
+      hex_col <- candidate
+      break
+    }
+  }
+  
+  if (is.null(hex_col)) {
+    stop("No hex_id column found in plot assignments!\n",
+         "  Looked for: ", paste(hex_col_candidates, collapse = ", "), "\n",
+         "  Found columns: ", paste(names(assignments), collapse = ", "))
+  }
+  
+  message("  Using hex assignment column: ", hex_col)
+  
   fia_with_hex <- fia_plot |>
-    dplyr::inner_join(assignments |> dplyr::select(CN, STATECD, hex_id), 
-                      by = c("CN", "STATECD"))
+    dplyr::inner_join(
+      assignments |> 
+        dplyr::select(CN, STATECD, hex_id = !!rlang::sym(hex_col)), 
+      by = c("CN", "STATECD")
+    )
   
   message("  Plots with metric + hex: ", nrow(fia_with_hex))
   
@@ -138,7 +159,7 @@ stage4_compute_metrics <- function(project_dir = ".",
   ))
 }
 
-# FIXED: Use pre-computed hex_id_jittered, no spatial operations!
+# FIXED: Use hex_id column (not hex_id_jittered)
 compute_positional_sd_from_library <- function(fia_with_hex, jitter_dir, jitter_meta,
                                                year_label, window_years, metric_col) {
   
@@ -159,10 +180,26 @@ compute_positional_sd_from_library <- function(fia_with_hex, jitter_dir, jitter_
   
   message("    Loaded ", format(nrow(jitters), big.mark = ","), " jittered coordinates")
   
-  # Verify hex_id_jittered column exists
-  if (!("hex_id_jittered" %in% names(jitters))) {
-    stop("Jitter library missing hex_id_jittered column! Re-run Stage 5.")
+  # FIXED: Check for hex_id column (not hex_id_jittered)
+  # Try multiple possible column names
+  hex_col_candidates <- c("hex_id", "hex_id_jittered", "hex_id_fia")
+  hex_col <- NULL
+  
+  for (candidate in hex_col_candidates) {
+    if (candidate %in% names(jitters)) {
+      hex_col <- candidate
+      break
+    }
   }
+  
+  if (is.null(hex_col)) {
+    stop("Jitter library missing hex assignment column!\n",
+         "  Looked for: ", paste(hex_col_candidates, collapse = ", "), "\n",
+         "  Found columns: ", paste(names(jitters), collapse = ", "), "\n",
+         "  Re-run Stage 5 to regenerate jitter library.")
+  }
+  
+  message("    Using hex assignment column: ", hex_col)
   
   # Filter to analysis window
   years <- (year_label - floor(window_years/2)):(year_label + floor(window_years/2))
@@ -187,18 +224,18 @@ compute_positional_sd_from_library <- function(fia_with_hex, jitter_dir, jitter_
     jitter_r <- jitters |> dplyr::filter(replicate_id == r)
     
     # Join FIA data with jittered hex assignments
-    # KEY: Use pre-computed hex_id_jittered, NO spatial operations!
+    # KEY: Use the detected hex column name
     data_r <- fia_year |>
       dplyr::inner_join(
-        jitter_r |> dplyr::select(CN, STATECD, hex_id_jittered),
+        jitter_r |> dplyr::select(CN, STATECD, hex_id_jitter = !!rlang::sym(hex_col)),
         by = c("CN", "STATECD")
       )
     
     # Compute hex means using JITTERED hex assignments
     hex_mean_r <- data_r |>
-      dplyr::group_by(hex_id_jittered) |>
+      dplyr::group_by(hex_id_jitter) |>
       dplyr::summarise(mean_rep = mean(.data[[metric_col]], na.rm = TRUE), .groups = "drop") |>
-      dplyr::rename(hex_id = hex_id_jittered) |>
+      dplyr::rename(hex_id = hex_id_jitter) |>
       dplyr::mutate(replicate_id = r)
     
     rep_results[[idx]] <- hex_mean_r
