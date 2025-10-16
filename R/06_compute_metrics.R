@@ -12,7 +12,7 @@ source("R/utils_metrics.R")
 `%||%` <- function(a,b) if (!is.null(a)) a else b
 
 stage4_compute_metrics <- function(project_dir = ".",
-                                   hex_grid_name = NULL,    # NEW: which grid to process
+                                   hex_grid_name = NULL,    # IMPORTANT: which grid to process
                                    hex_path = "data/hex/hex_grid.geojson",
                                    hex_layer = NULL,
                                    metric = "aglb",
@@ -62,6 +62,10 @@ stage4_compute_metrics <- function(project_dir = ".",
   )
   
   message("→ Computing metric: ", metric)
+  if (!is.null(hex_grid_name)) {
+    message("→ Grid scale: ", hex_grid_name)
+  }
+  
   fia_root <- if (fs::dir_exists(fs::path(project_dir, "data", "interim", "fia_region"))) {
     fs::path(project_dir, "data", "interim", "fia_region")
   } else {
@@ -77,23 +81,35 @@ stage4_compute_metrics <- function(project_dir = ".",
   message("→ Joining with hex assignments...")
   assignments <- readr::read_csv(assignments_file, show_col_types = FALSE)
   
-  # Auto-detect hex_id column name (hex_id, hex_id_fia, etc.)
-  hex_col_candidates <- c("hex_id", "hex_id_fia", "hex_id_1.5k", "hex_id_3k", "hex_id_6k")
-  hex_col <- NULL
-  for (candidate in hex_col_candidates) {
-    if (candidate %in% names(assignments)) {
-      hex_col <- candidate
-      break
+  # FIXED: Get the correct hex column for this grid scale
+  if (!is.null(hex_grid_name)) {
+    hex_col <- paste0("hex_id_", hex_grid_name)
+    if (!(hex_col %in% names(assignments))) {
+      # Fallback: hex_id might be used for fia grid
+      if ("hex_id" %in% names(assignments) && hex_grid_name == "fia") {
+        hex_col <- "hex_id"
+      } else {
+        available_hex_cols <- names(assignments)[grepl("^hex_id", names(assignments))]
+        stop("Column not found for grid '", hex_grid_name, "': ", hex_col,
+             "\n  Available columns: ", paste(available_hex_cols, collapse = ", "))
+      }
     }
+    message("  Using hex assignment column: ", hex_col)
+  } else {
+    # Auto-detect (fallback for backward compatibility)
+    hex_col_candidates <- c("hex_id", "hex_id_fia", "hex_id_1.5k", "hex_id_3k", "hex_id_6k")
+    hex_col <- NULL
+    for (candidate in hex_col_candidates) {
+      if (candidate %in% names(assignments)) {
+        hex_col <- candidate
+        break
+      }
+    }
+    if (is.null(hex_col)) {
+      stop("No hex_id column found in plot assignments!")
+    }
+    message("  Auto-detected hex column: ", hex_col)
   }
-  
-  if (is.null(hex_col)) {
-    stop("No hex_id column found in plot assignments!\n",
-         "  Looked for: ", paste(hex_col_candidates, collapse = ", "), "\n",
-         "  Found columns: ", paste(names(assignments), collapse = ", "))
-  }
-  
-  message("  Using hex assignment column: ", hex_col)
   
   fia_with_hex <- fia_plot |>
     dplyr::inner_join(
@@ -108,8 +124,12 @@ stage4_compute_metrics <- function(project_dir = ".",
     yaml::read_yaml("configs/process.yml")
   } else list()
   
+  # Include grid name in run_id
+  grid_suffix <- if (!is.null(hex_grid_name)) paste0("_", hex_grid_name) else ""
+  
   run_id <- run_id %||% cfg$run_id %||%
-    paste0(format(Sys.Date(), "%Y-%m-%d"), "_", metric, "_W", level_window, "y")
+    paste0(format(Sys.Date(), "%Y-%m-%d"), "_", metric, grid_suffix, "_W", level_window, "y")
+  
   out_dir <- fs::path(project_dir, "runs", run_id)
   fs::dir_create(out_dir, recurse = TRUE)
   message("→ Output dir: ", out_dir)
@@ -131,7 +151,8 @@ stage4_compute_metrics <- function(project_dir = ".",
       jitter_meta = jitter_meta,
       year_label = yr,
       window_years = level_window,
-      metric_col = metric_col
+      metric_col = metric_col,
+      hex_grid_name = hex_grid_name  # Pass grid name!
     )
     
     out_design[[i]] <- fia_hex_stats |> dplyr::mutate(metric = metric)
@@ -159,9 +180,10 @@ stage4_compute_metrics <- function(project_dir = ".",
   ))
 }
 
-# FIXED: Use hex_id column (not hex_id_jittered)
+# FIXED: Pass hex_grid_name to get correct column
 compute_positional_sd_from_library <- function(fia_with_hex, jitter_dir, jitter_meta,
-                                               year_label, window_years, metric_col) {
+                                               year_label, window_years, metric_col,
+                                               hex_grid_name = NULL) {
   
   message("  Computing positional SD from jitter library...")
   
@@ -180,26 +202,37 @@ compute_positional_sd_from_library <- function(fia_with_hex, jitter_dir, jitter_
   
   message("    Loaded ", format(nrow(jitters), big.mark = ","), " jittered coordinates")
   
-  # FIXED: Check for hex_id column (not hex_id_jittered)
-  # Try multiple possible column names
-  hex_col_candidates <- c("hex_id", "hex_id_jittered", "hex_id_fia")
-  hex_col <- NULL
-  
-  for (candidate in hex_col_candidates) {
-    if (candidate %in% names(jitters)) {
-      hex_col <- candidate
-      break
+  # FIXED: Get the correct hex column for this grid scale
+  if (!is.null(hex_grid_name)) {
+    hex_col <- paste0("hex_id_", hex_grid_name)
+    if (!(hex_col %in% names(jitters))) {
+      # Fallback for fia grid
+      if ("hex_id_jittered" %in% names(jitters) && hex_grid_name == "fia") {
+        hex_col <- "hex_id_jittered"
+      } else if ("hex_id" %in% names(jitters) && hex_grid_name == "fia") {
+        hex_col <- "hex_id"
+      } else {
+        available_cols <- names(jitters)[grepl("^hex_id", names(jitters))]
+        stop("Jitter library missing hex column for grid '", hex_grid_name, "': ", hex_col,
+             "\n  Available: ", paste(available_cols, collapse = ", "))
+      }
     }
+    message("    Using jittered hex column: ", hex_col)
+  } else {
+    # Auto-detect fallback
+    hex_col_candidates <- c("hex_id", "hex_id_jittered", "hex_id_fia")
+    hex_col <- NULL
+    for (candidate in hex_col_candidates) {
+      if (candidate %in% names(jitters)) {
+        hex_col <- candidate
+        break
+      }
+    }
+    if (is.null(hex_col)) {
+      stop("No hex assignment column found in jitter library!")
+    }
+    message("    Auto-detected hex column: ", hex_col)
   }
-  
-  if (is.null(hex_col)) {
-    stop("Jitter library missing hex assignment column!\n",
-         "  Looked for: ", paste(hex_col_candidates, collapse = ", "), "\n",
-         "  Found columns: ", paste(names(jitters), collapse = ", "), "\n",
-         "  Re-run Stage 5 to regenerate jitter library.")
-  }
-  
-  message("    Using hex assignment column: ", hex_col)
   
   # Filter to analysis window
   years <- (year_label - floor(window_years/2)):(year_label + floor(window_years/2))
@@ -266,6 +299,16 @@ if (identical(environment(), globalenv()) && !length(sys.calls())) {
     yaml::read_yaml("configs/process.yml")
   } else list()
   
+  # Parse command line arguments
+  args <- commandArgs(trailingOnly = TRUE)
+  get_arg <- function(flag, default = NULL) {
+    hit <- grep(paste0("^", flag, "="), args, value = TRUE)
+    if (length(hit)) sub(paste0("^", flag, "="), "", hit[1]) else default
+  }
+  
+  # Get grid name from command line
+  grid_name <- get_arg("--grid", NULL)
+  
   years_vec <- if (!is.null(cfg$years)) {
     if (is.list(cfg$years) && length(cfg$years) == 2) {
       seq(cfg$years[[1]], cfg$years[[2]])
@@ -278,6 +321,7 @@ if (identical(environment(), globalenv()) && !length(sys.calls())) {
   
   stage4_compute_metrics(
     project_dir = cfg$project_dir %||% ".",
+    hex_grid_name = grid_name,  # Use command line grid
     hex_path = cfg$hex_path %||% "data/hex/hex_grid.geojson",
     hex_layer = cfg$hex_layer %||% NULL,
     metric = cfg$metric %||% "aglb",

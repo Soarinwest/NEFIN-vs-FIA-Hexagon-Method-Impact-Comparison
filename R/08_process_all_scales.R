@@ -68,22 +68,24 @@ process_all_scales <- function(project_dir = ".",
       next
     }
     
-    # Compute metrics
+    # FIXED: Pass the grid name to compute metrics!
     message("\n→ Computing metrics...")
     result_info <- stage4_compute_metrics(
       project_dir = project_dir,
-      hex_grid_name = grid_name,
+      hex_grid_name = grid_name,  # CRITICAL: Pass the grid name!
+      hex_path = grid_info$path,   # Use grid-specific path
+      hex_layer = grid_info$layer,
       metric = metric,
       years = years,
       level_window = level_window,
       run_id = run_id
     )
     
-    # Run error analysis
+    # Run error analysis with correct hex grid
     message("\n→ Running error analysis...")
     error_analysis(
       run_dir = result_info$run_dir,
-      hex_path = grid_info$path,
+      hex_path = grid_info$path,  # Use grid-specific path!
       hex_layer = grid_info$layer,
       create_maps = TRUE,
       create_plots = TRUE

@@ -90,11 +90,15 @@ master_process_all <- function(project_dir = ".",
     cat("Processing Grid", i, "of", length(grid_names), ":", grid_name, "\n")
     cat("────────────────────────────────────────────────────────\n")
     
+    # Get the correct hex path for this grid
+    grid_info <- cfg$hex_grids[[i]]
+    hex_path <- grid_info$path %||% cfg$hex_path %||% "data/hex/hex_grid.geojson"
+    
     result <- stage4_compute_metrics(
       project_dir = project_dir,
-      hex_grid_name = grid_name,
-      hex_path = cfg$hex_path %||% "data/hex/hex_grid.geojson",
-      hex_layer = cfg$hex_layer %||% NULL,
+      hex_grid_name = grid_name,  # CRITICAL: Pass grid name!
+      hex_path = hex_path,         # Use grid-specific path!
+      hex_layer = grid_info$layer %||% cfg$hex_layer %||% NULL,
       metric = cfg$metric %||% "aglb",
       years = if (!is.null(cfg$years) && is.list(cfg$years) && length(cfg$years) == 2) {
         seq(cfg$years[[1]], cfg$years[[2]])

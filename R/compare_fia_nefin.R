@@ -1,4 +1,5 @@
 # R/compare_fia_nefin.R
+# R/compare_fia_nefin.R
 # Compare FIA and NEFIN biomass estimates by hex grid
 
 suppressPackageStartupMessages({
@@ -14,24 +15,30 @@ compare_fia_nefin <- function(fia_results = NULL,
                               hex_grid_name = "fia",
                               years = 2018:2020,
                               level_window = 3,
-                              out_dir = "runs/fia_nefin_comparison") {
+                              out_dir = NULL) {  # Made output dir configurable
   
   message("\n═══════════════════════════════════════════════════════════")
   message("FIA vs NEFIN COMPARISON")
   message("═══════════════════════════════════════════════════════════\n")
   
+  # Set output directory based on grid name
+  if (is.null(out_dir)) {
+    out_dir <- fs::path("runs", paste0("fia_nefin_comparison_", hex_grid_name))
+  }
+  
   fs::dir_create(out_dir, recurse = TRUE)
   
   # Find FIA results if not provided
   if (is.null(fia_results)) {
-    # Look for most recent FIA run
+    # Look for most recent FIA run for this specific grid
     runs_dir <- "runs"
     run_dirs <- list.dirs(runs_dir, recursive = FALSE)
+    # Look for runs with the grid name in them
     fia_runs <- run_dirs[grepl(paste0("_", hex_grid_name, "_"), run_dirs)]
     
     if (!length(fia_runs)) {
       stop("No FIA results found for grid: ", hex_grid_name,
-           "\n  Run: Rscript run_pipeline.R --compute --grid=", hex_grid_name)
+           "\n  Run: Rscript R/06_compute_metrics.R --grid=", hex_grid_name)
     }
     
     # Get most recent
@@ -63,10 +70,18 @@ compare_fia_nefin <- function(fia_results = NULL,
   # Get hex column for this grid
   hex_col <- paste0("hex_id_", hex_grid_name)
   
+  # Check if column exists - might be just "hex_id" for fia grid
   if (!(hex_col %in% names(nefin))) {
-    stop("NEFIN assignments missing column: ", hex_col,
-         "\n  Available grids: ", paste(gsub("hex_id_", "", names(nefin)[grepl("^hex_id_", names(nefin))]), collapse = ", "))
+    if (hex_grid_name == "fia" && "hex_id" %in% names(nefin)) {
+      hex_col <- "hex_id"
+    } else {
+      available_grids <- gsub("hex_id_", "", names(nefin)[grepl("^hex_id", names(nefin))])
+      stop("NEFIN assignments missing column for grid '", hex_grid_name, "': ", hex_col,
+           "\n  Available grids: ", paste(available_grids, collapse = ", "))
+    }
   }
+  
+  message("  Using column: ", hex_col)
   
   # Aggregate NEFIN to hex level (matching FIA structure)
   message("\n→ Aggregating NEFIN by hex...")
@@ -119,7 +134,10 @@ compare_fia_nefin <- function(fia_results = NULL,
       # Data availability
       has_fia = !is.na(mean_fia),
       has_nefin = !is.na(mean_nefin),
-      has_both = has_fia & has_nefin
+      has_both = has_fia & has_nefin,
+      
+      # Add grid scale identifier
+      grid_scale = hex_grid_name
     )
   
   # Summary stats
@@ -207,6 +225,6 @@ if (identical(environment(), globalenv()) && !length(sys.calls())) {
     hex_grid_name = get_arg("--grid", "fia"),
     years = eval(parse(text = get_arg("--years", "2018:2020"))),
     level_window = as.integer(get_arg("--window", "3")),
-    out_dir = get_arg("--out", "runs/fia_nefin_comparison")
+    out_dir = get_arg("--out", NULL)
   )
 }
