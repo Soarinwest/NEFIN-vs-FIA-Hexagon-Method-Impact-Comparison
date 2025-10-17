@@ -71,6 +71,22 @@ hex_grids:
     path: "data/hex/hex_grid_2367kac.geojson"
     layer: null
 
+  - name: "6059k"
+    path: "data/hex/hex_grid_6059kac.geojson"
+    layer: null
+
+  - name: "24238k"
+    path: "data/hex/hex_grid_24238kac.geojson"
+    layer: null
+
+  - name: "54536k"
+    path: "data/hex/hex_grid_54536kac.geojson"
+    layer: null
+
+  - name: "96952k"
+    path: "data/hex/hex_grid_96952kac.geojson"
+    layer: null
+
 # Default grid for initial plot assignment (use FIA official or finest)
 hex_path: "data/hex/hex_grid.geojson"
 hex_layer: null
@@ -82,90 +98,115 @@ hex_sizes:
     clip_to: "data/hex/hex_grid.geojson"
     out_path: "data/hex/hex_grid_532ac.geojson"
     exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
-    buffer_miles: 5
+    buffer_miles: 0
 
   - area_acres: 946
     clip_to: "data/hex/hex_grid.geojson"
     out_path: "data/hex/hex_grid_946ac.geojson"
     exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
-    buffer_miles: 5
+    buffer_miles: 0
 
   - area_acres: 2100
     clip_to: "data/hex/hex_grid.geojson"
     out_path: "data/hex/hex_grid_2.1kac.geojson"
     exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
-    buffer_miles: 5
+    buffer_miles: 0
 
   - area_acres: 3800
     clip_to: "data/hex/hex_grid.geojson"
     out_path: "data/hex/hex_grid_3.8kac.geojson"
     exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
-    buffer_miles: 5
+    buffer_miles: 0
 
   - area_acres: 5900
     clip_to: "data/hex/hex_grid.geojson"
     out_path: "data/hex/hex_grid_5.9kac.geojson"
     exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
-    buffer_miles: 5
+    buffer_miles: 0
 
   - area_acres: 8500
     clip_to: "data/hex/hex_grid.geojson"
     out_path: "data/hex/hex_grid_8.5kac.geojson"
     exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
-    buffer_miles: 5
+    buffer_miles: 0
 
   - area_acres: 15100
     clip_to: "data/hex/hex_grid.geojson"
     out_path: "data/hex/hex_grid_15.1kac.geojson"
     exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
-    buffer_miles: 5
+    buffer_miles: 0
 
   - area_acres: 23700
     clip_to: "data/hex/hex_grid.geojson"
     out_path: "data/hex/hex_grid_23.7kac.geojson"
     exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
-    buffer_miles: 5
+    buffer_miles: 0
 
   - area_acres: 53300
     clip_to: "data/hex/hex_grid.geojson"
     out_path: "data/hex/hex_grid_53.3kac.geojson"
     exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
-    buffer_miles: 5
+    buffer_miles: 0
 
   - area_acres: 94700
     clip_to: "data/hex/hex_grid.geojson"
     out_path: "data/hex/hex_grid_94.7kac.geojson"
     exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
-    buffer_miles: 5
+    buffer_miles: 0
 
   - area_acres: 213000
     clip_to: "data/hex/hex_grid.geojson"
     out_path: "data/hex/hex_grid_213kac.geojson"
     exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
-    buffer_miles: 5
+    buffer_miles: 0
 
   - area_acres: 379000
     clip_to: "data/hex/hex_grid.geojson"
     out_path: "data/hex/hex_grid_379kac.geojson"
     exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
-    buffer_miles: 5
+    buffer_miles: 0
 
   - area_acres: 592000
     clip_to: "data/hex/hex_grid.geojson"
     out_path: "data/hex/hex_grid_592kac.geojson"
     exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
-    buffer_miles: 5
+    buffer_miles: 0
 
   - area_acres: 1515000
-    clip_to: "data/hex/hex_grid_1515kac.geojson"
+    clip_to: "data/hex/hex_grid.geojson"
+    out_path: "data/hex/hex_grid_1515kac.geojson"
     exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
-    buffer_miles: 5
+    buffer_miles: 0
 
   - area_acres: 2367000
     clip_to: "data/hex/hex_grid.geojson"
     out_path: "data/hex/hex_grid_2367kac.geojson"
     exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
-    buffer_miles: 5
+    buffer_miles: 0
+
+  - area_acres: 6059520
+    clip_to: "data/hex/hex_grid.geojson"
+    out_path: "data/hex/hex_grid_6059kac.geojson"
+    exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
+    buffer_miles: 0
+
+  - area_acres: 24238080
+    clip_to: "data/hex/hex_grid.geojson"
+    out_path: "data/hex/hex_grid_24238kac.geojson"
+    exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
+    buffer_miles: 0
+
+  - area_acres: 54535680
+    clip_to: "data/hex/hex_grid.geojson"
+    out_path: "data/hex/hex_grid_54536kac.geojson"
+    exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
+    buffer_miles: 0
+
+  - area_acres: 96952320
+    clip_to: "data/hex/hex_grid.geojson"
+    out_path: "data/hex/hex_grid_96952kac.geojson"
+    exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
+    buffer_miles: 0
 
 # Choose metric: aglb, carbon, mortality, growth, regeneration
 metric: "aglb"
