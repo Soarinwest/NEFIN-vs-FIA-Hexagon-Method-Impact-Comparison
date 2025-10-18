@@ -78,24 +78,41 @@ run_pipeline <- function(stages, overwrite = FALSE) {
     cat("══════════════════════════════════════════════════════════\n")
     safe_source("R/create_hex_grid.R")
     
-    # Check config for hex creation parameters
-    hex_sizes <- cfg_proc$hex_sizes %||% list(list(area_acres = 6000))
-    
-    if (is.numeric(hex_sizes)) {
-      # Simple list of sizes
-      hex_sizes <- lapply(hex_sizes, function(x) list(area_acres = x))
-    }
-    
-    for (hex_spec in hex_sizes) {
-      create_hex_grid(
-        area_acres = hex_spec$area_acres,
-        clip_to = hex_spec$clip_to %||% cfg_hex$national_hex_path %||% "data/hex/hex_grid.geojson",
-        clip_layer = hex_spec$clip_layer %||% NULL,
-        exclude_water = hex_spec$exclude_water %||% NULL,
-        buffer_miles = hex_spec$buffer_miles %||% 5,
-        out_path = hex_spec$out_path %||% NULL,
+    # Use parallel processing if available
+    if (requireNamespace("parallel", quietly = TRUE) && 
+        requireNamespace("doParallel", quietly = TRUE) &&
+        requireNamespace("foreach", quietly = TRUE)) {
+      
+      hex_sizes <- cfg_proc$hex_sizes %||% list(list(area_acres = 6000))
+      create_multiple_grids_parallel(
+        hex_sizes_specs = hex_sizes,
+        n_cores = NULL,  # Auto-detect
         overwrite = overwrite
       )
+    } else {
+      # Fall back to sequential processing
+      hex_sizes <- cfg_proc$hex_sizes %||% list(list(area_acres = 6000))
+      
+      if (is.numeric(hex_sizes)) {
+        hex_sizes <- lapply(hex_sizes, function(x) list(area_acres = x))
+      }
+      
+      cat("\n→ Creating ", length(hex_sizes), " hex grids sequentially\n")
+      
+      for (i in seq_along(hex_sizes)) {
+        hex_spec <- hex_sizes[[i]]
+        cat("\n════ Grid ", i, " of ", length(hex_sizes), " ════\n", sep = "")
+        
+        create_hex_grid(
+          area_acres = hex_spec$area_acres,
+          clip_to = hex_spec$clip_to %||% cfg_hex$national_hex_path %||% "data/hex/hex_grid.geojson",
+          clip_layer = hex_spec$clip_layer %||% NULL,
+          exclude_water = hex_spec$exclude_water %||% NULL,
+          buffer_miles = hex_spec$buffer_miles %||% NULL,  # Pass NULL if not specified
+          out_path = hex_spec$out_path %||% NULL,
+          overwrite = overwrite
+        )
+      }
     }
     cat("\n")
   }
