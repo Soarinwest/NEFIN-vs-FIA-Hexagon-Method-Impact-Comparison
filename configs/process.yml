@@ -1,197 +1,53 @@
-# configs/process.yml (UPDATED)
-# Main processing configuration with multi-grid support
+# configs/process.yml
+# Main processing configuration with multi-scale support
 
 project_dir: "."
 
 # Multiple hex grids for multi-scale analysis
-# Each jittered point will be assigned to ALL grids
-# Multiple hex grids for multi-scale analysis
+# Scales from 100 ha to 100,000 ha (larger than FIA's 46,000 ha)
 hex_grids:
   - name: "fia"
     path: "data/hex/hex_grid.geojson"
     layer: null
 
-  # Scale-threshold set in hectares
-  - name: "200ha"
-    path: "data/hex/hex_grid_200ha.geojson"
+  - name: "100ha"
+    path: "data/hex/hex_grid_100ha.geojson"
     layer: null
 
-  - name: "400ha"
-    path: "data/hex/hex_grid_400ha.geojson"
+  - name: "500ha"
+    path: "data/hex/hex_grid_500ha.geojson"
     layer: null
 
-  - name: "800ha"
-    path: "data/hex/hex_grid_800ha.geojson"
+  - name: "1kha"
+    path: "data/hex/hex_grid_1kha.geojson"
     layer: null
 
-  - name: "1.5kha"
-    path: "data/hex/hex_grid_1.5kha.geojson"
-    layer: null
-
-  - name: "2.5kha"
-    path: "data/hex/hex_grid_2.5kha.geojson"  # ~6000 acres (FIA standard)
-    layer: null
-
-  - name: "3.5kha"
-    path: "data/hex/hex_grid_3.5kha.geojson"
-    layer: null
-
-  - name: "6kha"
-    path: "data/hex/hex_grid_6kha.geojson"
+  - name: "5kha"
+    path: "data/hex/hex_grid_5kha.geojson"
     layer: null
 
   - name: "10kha"
     path: "data/hex/hex_grid_10kha.geojson"
     layer: null
 
-  - name: "20kha"
-    path: "data/hex/hex_grid_20kha.geojson"
+  - name: "50kha"
+    path: "data/hex/hex_grid_50kha.geojson"
     layer: null
 
-  - name: "40kha"
-    path: "data/hex/hex_grid_40kha.geojson"
+  - name: "100kha"
+    path: "data/hex/hex_grid_100kha.geojson"
     layer: null
 
-  - name: "80kha"
-    path: "data/hex/hex_grid_80kha.geojson"
-    layer: null
+# Settings for creating hex grids (used by --create-hex)
+hex_creation_settings:
+  area_ha_list: [100, 500, 1000, 5000, 10000, 50000, 100000]
+  clip_to: "data/hex/hex_grid.geojson"  # Use FIA grid as boundary
+  exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
+  buffer_km: 0  # No buffer when clipping to existing grid
 
-  - name: "150kha"
-    path: "data/hex/hex_grid_150kha.geojson"
-    layer: null
-
-  - name: "250kha"
-    path: "data/hex/hex_grid_250kha.geojson"
-    layer: null
-
-  - name: "600kha"
-    path: "data/hex/hex_grid_600kha.geojson"
-    layer: null
-
-  - name: "1000kha"
-    path: "data/hex/hex_grid_1000kha.geojson"
-    layer: null
-
-# Default grid for initial plot assignment (use FIA official or finest)
+# Default grid for initial plot assignment
 hex_path: "data/hex/hex_grid.geojson"
 hex_layer: null
-
-# Multiple hex grid sizes (for creating new grids)
-# Note: FIA official grid already exists, only create custom sizes
-hex_sizes:
-  - area_acres: 532
-    clip_to: "data/hex/hex_grid.geojson"
-    out_path: "data/hex/hex_grid_532ac.geojson"
-    exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
-    buffer_miles: 0
-
-  - area_acres: 946
-    clip_to: "data/hex/hex_grid.geojson"
-    out_path: "data/hex/hex_grid_946ac.geojson"
-    exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
-    buffer_miles: 0
-
-  - area_acres: 2100
-    clip_to: "data/hex/hex_grid.geojson"
-    out_path: "data/hex/hex_grid_2.1kac.geojson"
-    exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
-    buffer_miles: 0
-
-  - area_acres: 3800
-    clip_to: "data/hex/hex_grid.geojson"
-    out_path: "data/hex/hex_grid_3.8kac.geojson"
-    exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
-    buffer_miles: 0
-
-  - area_acres: 5900
-    clip_to: "data/hex/hex_grid.geojson"
-    out_path: "data/hex/hex_grid_5.9kac.geojson"
-    exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
-    buffer_miles: 0
-
-  - area_acres: 8500
-    clip_to: "data/hex/hex_grid.geojson"
-    out_path: "data/hex/hex_grid_8.5kac.geojson"
-    exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
-    buffer_miles: 0
-
-  - area_acres: 15100
-    clip_to: "data/hex/hex_grid.geojson"
-    out_path: "data/hex/hex_grid_15.1kac.geojson"
-    exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
-    buffer_miles: 0
-
-  - area_acres: 23700
-    clip_to: "data/hex/hex_grid.geojson"
-    out_path: "data/hex/hex_grid_23.7kac.geojson"
-    exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
-    buffer_miles: 0
-
-  - area_acres: 53300
-    clip_to: "data/hex/hex_grid.geojson"
-    out_path: "data/hex/hex_grid_53.3kac.geojson"
-    exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
-    buffer_miles: 0
-
-  - area_acres: 94700
-    clip_to: "data/hex/hex_grid.geojson"
-    out_path: "data/hex/hex_grid_94.7kac.geojson"
-    exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
-    buffer_miles: 0
-
-  - area_acres: 213000
-    clip_to: "data/hex/hex_grid.geojson"
-    out_path: "data/hex/hex_grid_213kac.geojson"
-    exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
-    buffer_miles: 0
-
-  - area_acres: 379000
-    clip_to: "data/hex/hex_grid.geojson"
-    out_path: "data/hex/hex_grid_379kac.geojson"
-    exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
-    buffer_miles: 0
-
-  - area_acres: 592000
-    clip_to: "data/hex/hex_grid.geojson"
-    out_path: "data/hex/hex_grid_592kac.geojson"
-    exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
-    buffer_miles: 0
-
-  - area_acres: 1515000
-    clip_to: "data/hex/hex_grid.geojson"
-    out_path: "data/hex/hex_grid_1515kac.geojson"
-    exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
-    buffer_miles: 0
-
-  - area_acres: 2367000
-    clip_to: "data/hex/hex_grid.geojson"
-    out_path: "data/hex/hex_grid_2367kac.geojson"
-    exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
-    buffer_miles: 0
-
-  - area_acres: 6059520
-    clip_to: "data/hex/hex_grid.geojson"
-    out_path: "data/hex/hex_grid_6059kac.geojson"
-    exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
-    buffer_miles: 0
-
-  - area_acres: 24238080
-    clip_to: "data/hex/hex_grid.geojson"
-    out_path: "data/hex/hex_grid_24238kac.geojson"
-    exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
-    buffer_miles: 0
-
-  - area_acres: 54535680
-    clip_to: "data/hex/hex_grid.geojson"
-    out_path: "data/hex/hex_grid_54536kac.geojson"
-    exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
-    buffer_miles: 0
-
-  - area_acres: 96952320
-    clip_to: "data/hex/hex_grid.geojson"
-    out_path: "data/hex/hex_grid_96952kac.geojson"
-    exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
-    buffer_miles: 0
 
 # Choose metric: aglb, carbon, mortality, growth, regeneration
 metric: "aglb"
@@ -206,7 +62,7 @@ metric_params:
 years: [2020, 2021, 2022, 2023, 2024]
 level_window: 5
 
-# Monte Carlo settings (used in Stage 5)
+# Monte Carlo settings
 mc_reps: 100              # Number of jitter replicates
 jitter_radius_m: 1609.34  # ~1 mile
 

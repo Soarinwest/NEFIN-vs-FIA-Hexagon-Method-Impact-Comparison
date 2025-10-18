@@ -13,17 +13,17 @@ suppressPackageStartupMessages({
 #' @param clip_to Path to polygon to clip grid to (GeoJSON, shapefile, etc.)
 #' @param clip_layer Layer name if clip_to is multi-layer (e.g., geopackage)
 #' @param exclude_water Path to waterbodies polygon to exclude (optional)
-#' @param buffer_km Buffer around clipping region in kilometers (to catch edge hexes)
+#' @param buffer_km Buffer around clipping region in kilometers
 #' @param crs Target CRS (default: 5070 - Albers Equal Area)
 #' @param out_path Output path for hex grid GeoJSON
 #' @param overwrite Overwrite existing output
 #' 
 #' @return Path to output file
-create_hex_grid <- function(area_ha = 2500,  # ~6000 acres
+create_hex_grid <- function(area_ha = 100,
                             clip_to = "data/hex/hex_grid.geojson",
                             clip_layer = NULL,
                             exclude_water = NULL,
-                            buffer_km = 8,  # ~5 miles
+                            buffer_km = 10,
                             crs = 5070,
                             out_path = NULL,
                             overwrite = FALSE) {
@@ -89,8 +89,8 @@ create_hex_grid <- function(area_ha = 2500,  # ~6000 acres
       
       # Get water area stats
       water_area_m2 <- as.numeric(sf::st_area(water_mask))
-      water_area_ha <- water_area_m2 / 10000  # m² to hectares
-      message("  Total water area: ", format(round(water_area_ha), big.mark = ","), " ha")
+      water_area_ha <- water_area_m2 / 10000
+      message("  Total water area: ", format(round(water_area_ha), big.mark = ","), " hectares")
       
       # Subtract water from land boundary
       message("→ Subtracting waterbodies from land area...")
@@ -98,7 +98,7 @@ create_hex_grid <- function(area_ha = 2500,  # ~6000 acres
       
       land_area_m2 <- as.numeric(sf::st_area(boundary))
       land_area_ha <- land_area_m2 / 10000
-      message("  Remaining land area: ", format(round(land_area_ha), big.mark = ","), " ha")
+      message("  Remaining land area: ", format(round(land_area_ha), big.mark = ","), " hectares")
       message("  Water coverage: ", round(100 * water_area_ha / (water_area_ha + land_area_ha), 1), "%")
     } else {
       message("⚠ Waterbodies file not found: ", exclude_water)
@@ -124,7 +124,7 @@ create_hex_grid <- function(area_ha = 2500,  # ~6000 acres
   cellsize_km <- cellsize_m / 1000
   
   message("\n→ Hexagon parameters:")
-  message("  Target area: ", format(area_ha, big.mark = ","), " ha")
+  message("  Target area: ", format(area_ha, big.mark = ","), " hectares")
   message("  Hex side: ", round(side_m, 1), " m (", round(side_km, 3), " km)")
   message("  Cell size (width): ", round(cellsize_m, 1), " m (", round(cellsize_km, 3), " km)")
   
@@ -189,12 +189,90 @@ create_hex_grid <- function(area_ha = 2500,  # ~6000 acres
   if (!is.null(water_mask)) {
     message("  Waterbodies excluded: YES")
   }
-  message("  Target area: ", format(area_ha, big.mark = ","), " ha")
-  message("  Actual area (mean): ", round(mean(actual_areas_ha), 1), " ha")
+  message("  Target area: ", format(area_ha, big.mark = ","), " hectares")
+  message("  Actual area (mean): ", round(mean(actual_areas_ha), 1), " hectares")
   message("  Actual area (range): ", round(min(actual_areas_ha), 1), " - ", 
-          round(max(actual_areas_ha), 1), " ha")
+          round(max(actual_areas_ha), 1), " hectares")
   message("  Hex spacing: ~", round(cellsize_km, 2), " km")
   message("═══════════════════════════════════════════════════════════\n")
   
   invisible(out_path)
+}
+
+# Helper: Create multiple grid sizes at once
+create_multiple_hex_grids <- function(area_ha_list = c(100, 500, 1000, 5000, 10000, 50000, 100000),
+                                      clip_to = "data/hex/hex_grid.geojson",
+                                      clip_layer = NULL,
+                                      exclude_water = NULL,
+                                      crs = 5070,
+                                      overwrite = FALSE) {
+  
+  results <- list()
+  
+  for (area in area_ha_list) {
+    message("\n\n")
+    message("████████████████████████████████████████████████████████████")
+    message("Creating grid: ", format(area, big.mark = ","), " hectares")
+    message("████████████████████████████████████████████████████████████")
+    
+    out_path <- create_hex_grid(
+      area_ha = area,
+      clip_to = clip_to,
+      clip_layer = clip_layer,
+      exclude_water = exclude_water,
+      crs = crs,
+      overwrite = overwrite
+    )
+    
+    results[[as.character(area)]] <- out_path
+  }
+  
+  message("\n\n")
+  message("═══════════════════════════════════════════════════════════")
+  message("ALL GRIDS CREATED")
+  message("═══════════════════════════════════════════════════════════")
+  for (area in names(results)) {
+    message("  ", area, " hectares: ", results[[area]])
+  }
+  message("═══════════════════════════════════════════════════════════\n")
+  
+  invisible(results)
+}
+
+# CLI interface
+if (identical(environment(), globalenv()) && !length(sys.calls())) {
+  args <- commandArgs(trailingOnly = TRUE)
+  
+  get_arg <- function(flag, default = NULL) {
+    hit <- grep(paste0("^", flag, "="), args, value = TRUE)
+    if (length(hit)) sub(paste0("^", flag, "="), "", hit[1]) else default
+  }
+  
+  # Check for multi-grid mode
+  if ("--multiple" %in% args) {
+    # Parse area list
+    areas_str <- get_arg("--areas", "100,500,1000,5000,10000,50000,100000")
+    areas <- as.numeric(strsplit(areas_str, ",")[[1]])
+    
+    create_multiple_hex_grids(
+      area_ha_list = areas,
+      clip_to = get_arg("--clip", "data/hex/hex_grid.geojson"),
+      clip_layer = get_arg("--layer", NULL),
+      exclude_water = get_arg("--exclude-water", NULL),
+      overwrite = "--overwrite" %in% args
+    )
+  } else {
+    # Single grid
+    area <- as.numeric(get_arg("--area", "100"))
+    
+    create_hex_grid(
+      area_ha = area,
+      clip_to = get_arg("--clip", "data/hex/hex_grid.geojson"),
+      clip_layer = get_arg("--layer", NULL),
+      exclude_water = get_arg("--exclude-water", NULL),
+      buffer_km = as.numeric(get_arg("--buffer", "10")),
+      out_path = get_arg("--out", NULL),
+      overwrite = "--overwrite" %in% args
+    )
+  }
 }
