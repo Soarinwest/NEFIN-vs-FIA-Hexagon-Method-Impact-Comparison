@@ -5,86 +5,71 @@ project_dir: "."
 
 # Multiple hex grids for multi-scale analysis
 # Each jittered point will be assigned to ALL grids
+# Multiple hex grids for multi-scale analysis
 hex_grids:
   - name: "fia"
     path: "data/hex/hex_grid.geojson"
     layer: null
 
-  # Scale-threshold set
-  - name: "0.5k"
-    path: "data/hex/hex_grid_532ac.geojson"
+  # Scale-threshold set in hectares
+  - name: "200ha"
+    path: "data/hex/hex_grid_200ha.geojson"
     layer: null
 
-  - name: "1k"
-    path: "data/hex/hex_grid_946ac.geojson"
+  - name: "400ha"
+    path: "data/hex/hex_grid_400ha.geojson"
     layer: null
 
-  - name: "2k"
-    path: "data/hex/hex_grid_2.1kac.geojson"
+  - name: "800ha"
+    path: "data/hex/hex_grid_800ha.geojson"
     layer: null
 
-  - name: "4k"
-    path: "data/hex/hex_grid_3.8kac.geojson"
+  - name: "1.5kha"
+    path: "data/hex/hex_grid_1.5kha.geojson"
     layer: null
 
-  - name: "6k"
-    path: "data/hex/hex_grid_5.9kac.geojson"
+  - name: "2.5kha"
+    path: "data/hex/hex_grid_2.5kha.geojson"  # ~6000 acres (FIA standard)
     layer: null
 
-  - name: "8k"
-    path: "data/hex/hex_grid_8.5kac.geojson"
+  - name: "3.5kha"
+    path: "data/hex/hex_grid_3.5kha.geojson"
     layer: null
 
-  - name: "15k"
-    path: "data/hex/hex_grid_15.1kac.geojson"
+  - name: "6kha"
+    path: "data/hex/hex_grid_6kha.geojson"
     layer: null
 
-  - name: "24k"
-    path: "data/hex/hex_grid_23.7kac.geojson"
+  - name: "10kha"
+    path: "data/hex/hex_grid_10kha.geojson"
     layer: null
 
-  - name: "53k"
-    path: "data/hex/hex_grid_53.3kac.geojson"
+  - name: "20kha"
+    path: "data/hex/hex_grid_20kha.geojson"
     layer: null
 
-  - name: "95k"
-    path: "data/hex/hex_grid_94.7kac.geojson"
+  - name: "40kha"
+    path: "data/hex/hex_grid_40kha.geojson"
     layer: null
 
-  - name: "213k"
-    path: "data/hex/hex_grid_213kac.geojson"
+  - name: "80kha"
+    path: "data/hex/hex_grid_80kha.geojson"
     layer: null
 
-  - name: "379k"
-    path: "data/hex/hex_grid_379kac.geojson"
+  - name: "150kha"
+    path: "data/hex/hex_grid_150kha.geojson"
     layer: null
 
-  - name: "592k"
-    path: "data/hex/hex_grid_592kac.geojson"
+  - name: "250kha"
+    path: "data/hex/hex_grid_250kha.geojson"
     layer: null
 
-  - name: "1515k"
-    path: "data/hex/hex_grid_1515kac.geojson"
+  - name: "600kha"
+    path: "data/hex/hex_grid_600kha.geojson"
     layer: null
 
-  - name: "2367k"
-    path: "data/hex/hex_grid_2367kac.geojson"
-    layer: null
-
-  - name: "6059k"
-    path: "data/hex/hex_grid_6059kac.geojson"
-    layer: null
-
-  - name: "24238k"
-    path: "data/hex/hex_grid_24238kac.geojson"
-    layer: null
-
-  - name: "54536k"
-    path: "data/hex/hex_grid_54536kac.geojson"
-    layer: null
-
-  - name: "96952k"
-    path: "data/hex/hex_grid_96952kac.geojson"
+  - name: "1000kha"
+    path: "data/hex/hex_grid_1000kha.geojson"
     layer: null
 
 # Default grid for initial plot assignment (use FIA official or finest)

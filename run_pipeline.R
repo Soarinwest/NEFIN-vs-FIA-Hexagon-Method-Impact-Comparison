@@ -71,49 +71,26 @@ run_pipeline <- function(stages, overwrite = FALSE) {
     yaml::read_yaml("configs/process.yml")
   } else list()
   
-  # STAGE 0: CREATE HEX GRID (NEW)
+  # STAGE 0: CREATE HEX GRIDS
   if (stages$create_hex) {
     cat("══════════════════════════════════════════════════════════\n")
     cat("STAGE 0: Hex Grid Creation\n")
     cat("══════════════════════════════════════════════════════════\n")
     safe_source("R/create_hex_grid.R")
     
-    # Use parallel processing if available
-    if (requireNamespace("parallel", quietly = TRUE) && 
-        requireNamespace("doParallel", quietly = TRUE) &&
-        requireNamespace("foreach", quietly = TRUE)) {
-      
-      hex_sizes <- cfg_proc$hex_sizes %||% list(list(area_acres = 6000))
-      create_multiple_grids_parallel(
-        hex_sizes_specs = hex_sizes,
-        n_cores = NULL,  # Auto-detect
-        overwrite = overwrite
-      )
-    } else {
-      # Fall back to sequential processing
-      hex_sizes <- cfg_proc$hex_sizes %||% list(list(area_acres = 6000))
-      
-      if (is.numeric(hex_sizes)) {
-        hex_sizes <- lapply(hex_sizes, function(x) list(area_acres = x))
-      }
-      
-      cat("\n→ Creating ", length(hex_sizes), " hex grids sequentially\n")
-      
-      for (i in seq_along(hex_sizes)) {
-        hex_spec <- hex_sizes[[i]]
-        cat("\n════ Grid ", i, " of ", length(hex_sizes), " ════\n", sep = "")
-        
-        create_hex_grid(
-          area_acres = hex_spec$area_acres,
-          clip_to = hex_spec$clip_to %||% cfg_hex$national_hex_path %||% "data/hex/hex_grid.geojson",
-          clip_layer = hex_spec$clip_layer %||% NULL,
-          exclude_water = hex_spec$exclude_water %||% NULL,
-          buffer_miles = hex_spec$buffer_miles %||% NULL,  # Pass NULL if not specified
-          out_path = hex_spec$out_path %||% NULL,
-          overwrite = overwrite
-        )
-      }
-    }
+    # Get hex creation settings from config
+    hex_settings <- cfg_proc$hex_creation_settings %||% list()
+    area_ha_list <- hex_settings$area_ha_list %||% c(100, 500, 1000, 5000, 10000, 50000, 100000)
+    clip_to <- hex_settings$clip_to %||% "data/hex/hex_grid.geojson"
+    exclude_water <- hex_settings$exclude_water %||% NULL
+    
+    # Create all grids
+    create_multiple_hex_grids(
+      area_ha_list = area_ha_list,
+      clip_to = clip_to,
+      exclude_water = exclude_water,
+      overwrite = overwrite
+    )
     cat("\n")
   }
   

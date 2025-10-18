@@ -38,26 +38,28 @@ analyze_scale_threshold <- function(consolidated_dir = NULL,
   # Add numeric scale value (extract from grid_scale name)
   fia <- fia |>
     dplyr::mutate(
-      scale_acres = dplyr::case_when(
-        grid_scale == "0.5k" ~ 532,
-        grid_scale == "1k" ~ 946,
-        grid_scale == "2k" ~ 2128,
-        grid_scale == "4k" ~ 3785,
-        grid_scale == "6k" ~ 5914,
-        grid_scale == "8k" ~ 8514,
-        grid_scale == "15k" ~ 15138,
-        grid_scale == "24k" ~ 23668,
-        grid_scale == "53k" ~ 53254,
-        grid_scale == "95k" ~ 94671,
-        grid_scale == "213k" ~ 213008,
-        grid_scale == "379k" ~ 378684,
-        grid_scale == "592k" ~ 591537,
-        grid_scale == "1515k" ~ 1514736,
-        grid_scale == "2367k" ~ 2366855,
+      scale_ha = dplyr::case_when(      
+        grid_scale == "200ha" ~ 200,
+        grid_scale == "400ha" ~ 400,
+        grid_scale == "800ha" ~ 800,
+        grid_scale == "1.5kha" ~ 1500,
+        grid_scale == "2.5kha" ~ 2500,
+        grid_scale == "3.5kha" ~ 3500,
+        grid_scale == "6kha" ~ 6000,
+        grid_scale == "10kha" ~ 10000,
+        grid_scale == "20kha" ~ 20000,
+        grid_scale == "40kha" ~ 40000,
+        grid_scale == "80kha" ~ 80000,
+        grid_scale == "150kha" ~ 150000,
+        grid_scale == "250kha" ~ 250000,
+        grid_scale == "600kha" ~ 600000,
+        grid_scale == "fia" ~ 640000,
+        grid_scale == "1000kha" ~ 1000000,
         TRUE ~ NA_real_
       ),
-      scale_km = sqrt(scale_acres / 0.247105) / 1000  # Convert to km
+      scale_km2 = scale_ha / 100  # Convert ha to km²
     )
+  
   
   # ========================================================================
   # ANALYSIS 1: Error components by scale
