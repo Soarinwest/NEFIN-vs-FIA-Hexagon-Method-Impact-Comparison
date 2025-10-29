@@ -83,8 +83,18 @@ stage4_build_jitter_library <- function(project_dir = ".",
   message("→ Reading plot assignments...")
   assignments <- readr::read_csv(assignments_file, show_col_types = FALSE)
   
+  # FIXED: Filter for plots that have at least one hex assignment
+  # Check all hex_id_* columns
+  hex_id_cols <- names(assignments)[grepl("^hex_id_", names(assignments))]
+  if (length(hex_id_cols) == 0) {
+    stop("No hex_id_* columns found in assignments file!")
+  }
+  
+  # Create a filter for plots with at least one valid hex assignment
+  has_any_hex <- rowSums(!is.na(assignments[hex_id_cols])) > 0
+  
   valid_plots <- assignments |>
-    dplyr::filter(!is.na(hex_id), 
+    dplyr::filter(has_any_hex,
                   is.finite(lat_original), is.finite(lon_original))
   
   message("  Total plots with hex assignment: ", nrow(valid_plots))
@@ -304,7 +314,7 @@ if (identical(environment(), globalenv()) && !length(sys.calls())) {
     project_dir = cfg$project_dir %||% ".",
     hex_grids = cfg$hex_grids,  # Load from config
     n_replicates = cfg$mc_reps %||% 100,
-    radius_m = cfg$jitter_radius_m %||% 1609.34,
+    radius_m = cfg$jitter_radius_m %||% 1609.34, 
     use_constraints = TRUE,
     overwrite = overwrite
   )
