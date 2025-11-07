@@ -63,7 +63,7 @@ years: [2020, 2021, 2022, 2023, 2024]
 level_window: 5
 
 # Monte Carlo settings
-mc_reps: 61              # Number of jitter replicates
+mc_reps: 80             # Number of jitter replicates
 jitter_radius_m: 1609.34  # ~1 mile
 
 # Jitter constraints

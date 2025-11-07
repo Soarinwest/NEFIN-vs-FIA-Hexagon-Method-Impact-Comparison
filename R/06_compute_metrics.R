@@ -11,6 +11,43 @@ source("R/utils_metrics.R")
 
 `%||%` <- function(a,b) if (!is.null(a)) a else b
 
+add_prism_covariates <- function(results, hex_grid_name, project_dir = ".") {
+  prism_file <- fs::path(project_dir, "data", "processed", "hex_prism_values.csv")
+  
+  if (!fs::file_exists(prism_file)) {
+    message("  ℹ No PRISM covariates found. Run extract_prism_to_hex.R to add climate data.")
+    return(results)
+  }
+  
+  message("  → Adding PRISM climate covariates...")
+  
+  # Load PRISM data
+  prism_data <- readr::read_csv(prism_file, show_col_types = FALSE)
+  
+  # Select columns for this grid scale
+  grid_cols <- names(prism_data)[grepl(paste0("_", hex_grid_name, "$"), names(prism_data))]
+  
+  if (length(grid_cols) == 0) {
+    message("    ⚠ No PRISM data found for grid: ", hex_grid_name)
+    return(results)
+  }
+  
+  # Rename columns to remove grid suffix for joining
+  prism_subset <- prism_data |>
+    dplyr::select(hex_id, all_of(grid_cols))
+  
+  names(prism_subset) <- gsub(paste0("_", hex_grid_name, "$"), "", names(prism_subset))
+  
+  # Join with results
+  results_with_prism <- results |>
+    dplyr::left_join(prism_subset, by = "hex_id")
+  
+  n_vars <- length(grid_cols)
+  message("    ✓ Added ", n_vars, " PRISM variables")
+  
+  return(results_with_prism)
+}
+
 stage4_compute_metrics <- function(project_dir = ".",
                                    hex_grid_name = NULL,    # IMPORTANT: which grid to process
                                    hex_path = "data/hex/hex_grid.geojson",
@@ -169,6 +206,8 @@ stage4_compute_metrics <- function(project_dir = ".",
       total_sd = sqrt(se^2 + dplyr::coalesce(positional_sd, 0)^2)
     )
   
+  joined <- add_prism_covariates(joined, hex_grid_name, project_dir)
+  
   out_file <- fs::path(out_dir, glue("hex_{metric}_results.csv"))
   readr::write_csv(joined, out_file)
   message("\n✓ Wrote: ", out_file)
@@ -180,45 +219,6 @@ stage4_compute_metrics <- function(project_dir = ".",
   ))
 }
 
-add_prism_covariates <- function(results, hex_grid_name, project_dir = ".") {
-  prism_file <- fs::path(project_dir, "data", "processed", "hex_prism_values.csv")
-  
-  if (!fs::file_exists(prism_file)) {
-    message("  ℹ No PRISM covariates found. Run extract_prism_to_hex.R to add climate data.")
-    return(results)
-  }
-  
-  message("  → Adding PRISM climate covariates...")
-  
-  # Load PRISM data
-  prism_data <- readr::read_csv(prism_file, show_col_types = FALSE)
-  
-  # Select columns for this grid scale
-  grid_cols <- names(prism_data)[grepl(paste0("_", hex_grid_name, "$"), names(prism_data))]
-  
-  if (length(grid_cols) == 0) {
-    message("    ⚠ No PRISM data found for grid: ", hex_grid_name)
-    return(results)
-  }
-  
-  # Rename columns to remove grid suffix for joining
-  prism_subset <- prism_data |>
-    dplyr::select(hex_id, all_of(grid_cols))
-  
-  names(prism_subset) <- gsub(paste0("_", hex_grid_name, "$"), "", names(prism_subset))
-  
-  # Join with results
-  results_with_prism <- results |>
-    dplyr::left_join(prism_subset, by = "hex_id")
-  
-  n_vars <- length(grid_cols)
-  message("    ✓ Added ", n_vars, " PRISM variables")
-  
-  return(results_with_prism)
-}
-
-# Insert this after computing the joined results (around line 160)
-joined <- add_prism_covariates(joined, hex_grid_name, project_dir)
 
 # FIXED: Pass hex_grid_name to get correct column
 compute_positional_sd_from_library <- function(fia_with_hex, jitter_dir, jitter_meta,

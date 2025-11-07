@@ -148,6 +148,75 @@ assign_nefin_to_hex <- function(nefin_csv = "data/processed/nefin_processed.csv"
     }
   }
   
+  # Create diagnostic maps
+  message("\n→ Creating diagnostic maps...")
+  
+  if (requireNamespace("ggplot2", quietly = TRUE) && 
+      requireNamespace("sf", quietly = TRUE)) {
+    library(ggplot2)
+    library(sf)
+    
+    # Create output directory for diagnostics
+    diag_dir <- fs::path("data", "processed", "nefin_diagnostics")
+    fs::dir_create(diag_dir, recurse = TRUE)
+    
+    # Map 1: Overview of all assignments
+    p_overview <- ggplot() +
+      geom_point(data = assignments,
+                 aes(x = lon_public, y = lat_public),
+                 size = 0.5, alpha = 0.3, color = "darkblue") +
+      labs(title = "NEFIN Plot Locations",
+           subtitle = paste("Total plots:", nrow(assignments)),
+           x = "Longitude", y = "Latitude") +
+      theme_minimal() +
+      coord_quickmap()
+    
+    ggsave(fs::path(diag_dir, "nefin_all_plots.png"), p_overview, 
+           width = 10, height = 8, dpi = 150)
+    message("  ✓ Saved: nefin_all_plots.png")
+    
+    # Map 2: Coverage by grid scale
+    for (grid_name in grid_names) {
+      message("  Creating map for ", grid_name, "...")
+      
+      hex_col <- paste0("hex_id_", grid_name)
+      n_assigned <- sum(!is.na(assignments[[hex_col]]))
+      n_missing <- sum(is.na(assignments[[hex_col]]))
+      
+      # Load the hex grid
+      grid_info <- hex_grids[[which(sapply(hex_grids, function(x) x$name) == grid_name)]]
+      hex_sf <- sf::st_read(grid_info$path, quiet = TRUE)
+      
+      # Count plots per hex
+      hex_counts <- assignments |>
+        dplyr::filter(!is.na(.data[[hex_col]])) |>
+        dplyr::count(.data[[hex_col]], name = "n_plots") |>
+        dplyr::rename(hex_id = 1)
+      
+      # Join with spatial data
+      hex_with_counts <- hex_sf |>
+        dplyr::left_join(hex_counts, by = "hex_id")
+      
+      # Create map
+      p_grid <- ggplot() +
+        geom_sf(data = hex_with_counts, 
+                aes(fill = n_plots), color = "gray50", size = 0.1) +
+        scale_fill_viridis_c(option = "magma", na.value = "gray90",
+                             name = "NEFIN\nplots") +
+        labs(title = paste("NEFIN Coverage -", grid_name, "grid"),
+             subtitle = paste("Assigned:", n_assigned, "| Missing:", n_missing,
+                              "| Hexes with data:", sum(hex_counts$n_plots > 0))) +
+        theme_void() +
+        theme(plot.title = element_text(face = "bold", hjust = 0.5),
+              plot.subtitle = element_text(hjust = 0.5))
+      
+      ggsave(fs::path(diag_dir, paste0("nefin_coverage_", grid_name, ".png")), 
+             p_grid, width = 10, height = 8, dpi = 150)
+    }
+    
+    message("  ✓ All diagnostic maps saved to: ", diag_dir)
+  }
+  
   # Summary
   message("\n=== Assignment Summary ===")
   message("  Total NEFIN plots: ", nrow(assignments))

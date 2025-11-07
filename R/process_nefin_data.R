@@ -265,6 +265,35 @@ process_nefin_data <- function(tree_csv = "data/raw/nefin/TREE_PLOT_DATA.csv",
       sd_aglb = sd(aglb_Mg_per_ha, na.rm = TRUE)
     )
   
+  # Create diagnostic map of NEFIN plot locations
+  message("\n→ Creating diagnostic map...")
+  
+  if (!requireNamespace("ggplot2", quietly = TRUE)) {
+    message("  ⚠ ggplot2 not available, skipping map")
+  } else {
+    library(ggplot2)
+    library(sf)
+    
+    # Create map
+    p_diagnostic <- ggplot() +
+      geom_point(data = nefin_processed,
+                 aes(x = lon_public, y = lat_public, color = aglb_Mg_per_ha),
+                 size = 1, alpha = 0.6) +
+      scale_color_viridis_c(option = "plasma", name = "AGLB\n(Mg/ha)") +
+      labs(title = "NEFIN Plot Locations",
+           subtitle = paste("Total plots:", nrow(nefin_processed), 
+                            "| Years:", min(nefin_processed$MEASYEAR), "-", 
+                            max(nefin_processed$MEASYEAR)),
+           x = "Longitude", y = "Latitude") +
+      theme_minimal() +
+      coord_quickmap()
+    
+    # Save diagnostic map
+    diagnostic_file <- fs::path(out_dir, "nefin_plot_locations_diagnostic.png")
+    ggsave(diagnostic_file, p_diagnostic, width = 10, height = 8, dpi = 150)
+    message("  ✓ Saved diagnostic map: ", diagnostic_file)
+  }
+  
   message("\n  Biomass statistics (Mg/ha):")
   message("    Mean: ", round(biomass_stats$mean_aglb, 2))
   message("    Median: ", round(biomass_stats$median_aglb, 2))
