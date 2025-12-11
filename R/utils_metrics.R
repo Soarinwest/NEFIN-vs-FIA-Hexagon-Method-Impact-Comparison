@@ -1,5 +1,6 @@
 # R/utils_metrics.R
 # Metric computation utilities
+# FIXED: Proper NA handling for single-observation hexes
 
 suppressPackageStartupMessages({
   library(dplyr); library(readr)
@@ -9,14 +10,29 @@ acres_to_ha <- 0.40468564224
 lbs_to_Mg   <- 0.00045359237
 
 # Weighted mean and SE
+# FIXED: Returns NA for SE when n < 2 (can't estimate variance from single observation)
 w_mean_se <- function(y, w) {
   keep <- is.finite(y) & is.finite(w) & w > 0
   y <- y[keep]; w <- w[keep]
   if (!length(y)) return(list(mean=NA_real_, se=NA_real_, n=0L, sumw=0))
-  p <- w/sum(w); mu <- sum(p*y)
+  
+  p <- w/sum(w)
+  mu <- sum(p*y)
+  
+  # FIX: SE is undefined (NA) with only 1 observation
+  # You cannot estimate variance from a single data point
+
+  if (length(y) < 2) {
+    return(list(mean=mu, se=NA_real_, n=length(y), sumw=sum(w)))
+  }
+  
   n_eff <- (sum(w)^2) / sum(w^2)
   var_w <- sum(p * (y - mu)^2)
-  se <- sqrt(var_w / max(n_eff, 1))
+  
+  # Apply Bessel correction for weighted variance (n/(n-1))
+  var_w_corrected <- var_w * length(y) / (length(y) - 1)
+  se <- sqrt(var_w_corrected / n_eff)
+  
   list(mean=mu, se=se, n=length(y), sumw=sum(w))
 }
 

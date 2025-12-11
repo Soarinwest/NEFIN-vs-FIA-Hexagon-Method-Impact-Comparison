@@ -137,6 +137,7 @@ summarize_fia_stability <- function(fia_df, scale_name, out_dir) {
 # ------------------------------------------------------------
 # main 5-year comparison with recommendations, fuzz, bias
 # now takes cfg for metadata
+# FIXED: Proper NA handling for fuzz_pressure calculation
 # ------------------------------------------------------------
 compare_5y_window <- function(fia_df,
                               nefin_df,
@@ -155,6 +156,9 @@ compare_5y_window <- function(fia_df,
   bias_concentration_threshold <- 0.8
   se_drop_good <- 0.15   # relative SE drop considered meaningful
   se_drop_small <- 0.05  # relative SE drop considered trivial
+  
+  # Minimum SE to consider valid for ratio calculations
+  min_se_for_ratio <- 0.1  # FIXED: Avoid division by near-zero SE
   
   # --- Prep NEFIN for these years and this grid ---
   nefin_xy <- nefin_df %>%
@@ -292,9 +296,17 @@ compare_5y_window <- function(fia_df,
     select(-calc)
   
   # fuzz pressure: how much FIA uncertainty is coming from positional fuzz?
+  # FIXED: More robust calculation that handles edge cases
   joined_5y <- joined_5y %>%
     mutate(
-      fuzz_pressure = positional_sd_5y / (fia_only_se + 1e-6)
+      fuzz_pressure = dplyr::case_when(
+        # Can't calculate if either value is NA
+        is.na(positional_sd_5y) | is.na(fia_only_se) ~ NA_real_,
+        # If SE is too small (including 0), ratio is undefined/infinite
+        fia_only_se < min_se_for_ratio ~ NA_real_,
+        # Normal case: calculate ratio
+        TRUE ~ positional_sd_5y / fia_only_se
+      )
     )
   
   # per-hex recommendation
@@ -331,56 +343,74 @@ compare_5y_window <- function(fia_df,
       level_window = level_window
     )
   
-  # plots for this grid
-  p_fuzz_vs_drop <- ggplot(joined_5y,
-                           aes(x = fuzz_pressure,
-                               y = relative_uncertainty_drop,
-                               color = recommendation)) +
-    geom_point(alpha = 0.6) +
-    labs(
-      title = paste0("Fuzz sensitivity vs NEFIN benefit (", grid_name, ", ", min(focal_years), "–", max(focal_years), ")"),
-      subtitle = paste0("FIA positional uncertainty modeled with ", mc_reps, " jitter draws at ±", cfg$jitter_radius_m, " m"),
-      x = "Fuzz pressure (positional_sd_5y / FIA-only SE)",
-      y = "Relative SE reduction after adding NEFIN"
-    ) +
-    theme_minimal(base_size = 14)
-  ggsave(
-    fs::path(out_dir, paste0("fuzz_vs_uncertainty_drop_", grid_name, ".png")),
-    p_fuzz_vs_drop,
-    width = 8, height = 6, dpi = 300
-  )
+  # plots for this grid - FIXED: filter out NA values for plotting
+  plot_data <- joined_5y %>%
+    filter(!is.na(fuzz_pressure), !is.na(relative_uncertainty_drop),
+           is.finite(fuzz_pressure), is.finite(relative_uncertainty_drop))
   
-  p_unc <- ggplot(joined_5y, aes(x = uncertainty_improvement)) +
-    geom_histogram(bins = 30, fill = "darkgreen", color = "white") +
-    geom_vline(xintercept = 0, color = "red", linetype = "dashed") +
-    labs(
-      title = paste0("Uncertainty Change With NEFIN (", grid_name, ", ", min(focal_years), "–", max(focal_years), ")"),
-      subtitle = "Positive = NEFIN lowered SE (good)",
-      x = "FIA-only SE − Augmented SE (Mg/ha)",
-      y = "Hex count"
-    ) +
-    theme_minimal(base_size = 14)
-  ggsave(
-    fs::path(out_dir, paste0("uncertainty_improvement_hist_5y_", grid_name, ".png")),
-    p_unc,
-    width = 8, height = 6, dpi = 300
-  )
+  if (nrow(plot_data) > 0) {
+    p_fuzz_vs_drop <- ggplot(plot_data,
+                             aes(x = fuzz_pressure,
+                                 y = relative_uncertainty_drop,
+                                 color = recommendation)) +
+      geom_point(alpha = 0.6) +
+      labs(
+        title = paste0("Fuzz sensitivity vs NEFIN benefit (", grid_name, ", ", min(focal_years), "–", max(focal_years), ")"),
+        subtitle = paste0("FIA positional uncertainty modeled with ", mc_reps, " jitter draws at ±", cfg$jitter_radius_m, " m"),
+        x = "Fuzz pressure (positional_sd_5y / FIA-only SE)",
+        y = "Relative SE reduction after adding NEFIN"
+      ) +
+      theme_minimal(base_size = 14)
+    ggsave(
+      fs::path(out_dir, paste0("fuzz_vs_uncertainty_drop_", grid_name, ".png")),
+      p_fuzz_vs_drop,
+      width = 8, height = 6, dpi = 300
+    )
+  }
   
-  p_change <- ggplot(joined_5y, aes(x = est_change)) +
-    geom_histogram(bins = 30, fill = "steelblue", color = "white") +
-    geom_vline(xintercept = 0, color = "red", linetype = "dashed") +
-    labs(
-      title = paste0("Shift in Biomass After Adding NEFIN (", grid_name, ", ", min(focal_years), "–", max(focal_years), ")"),
-      subtitle = "augmented_mean − FIA_only_mean (Mg/ha)",
-      x = "Change in estimate (Mg/ha)",
-      y = "Hex count"
-    ) +
-    theme_minimal(base_size = 14)
-  ggsave(
-    fs::path(out_dir, paste0("est_change_hist_5y_", grid_name, ".png")),
-    p_change,
-    width = 8, height = 6, dpi = 300
-  )
+  # Filter for uncertainty improvement plot
+  plot_data_unc <- joined_5y %>%
+    filter(!is.na(uncertainty_improvement), is.finite(uncertainty_improvement))
+  
+  if (nrow(plot_data_unc) > 0) {
+    p_unc <- ggplot(plot_data_unc, aes(x = uncertainty_improvement)) +
+      geom_histogram(bins = 30, fill = "darkgreen", color = "white") +
+      geom_vline(xintercept = 0, color = "red", linetype = "dashed") +
+      labs(
+        title = paste0("Uncertainty Change With NEFIN (", grid_name, ", ", min(focal_years), "–", max(focal_years), ")"),
+        subtitle = "Positive = NEFIN lowered SE (good)",
+        x = "FIA-only SE − Augmented SE (Mg/ha)",
+        y = "Hex count"
+      ) +
+      theme_minimal(base_size = 14)
+    ggsave(
+      fs::path(out_dir, paste0("uncertainty_improvement_hist_5y_", grid_name, ".png")),
+      p_unc,
+      width = 8, height = 6, dpi = 300
+    )
+  }
+  
+  # Filter for estimate change plot
+  plot_data_change <- joined_5y %>%
+    filter(!is.na(est_change), is.finite(est_change))
+  
+  if (nrow(plot_data_change) > 0) {
+    p_change <- ggplot(plot_data_change, aes(x = est_change)) +
+      geom_histogram(bins = 30, fill = "steelblue", color = "white") +
+      geom_vline(xintercept = 0, color = "red", linetype = "dashed") +
+      labs(
+        title = paste0("Shift in Biomass After Adding NEFIN (", grid_name, ", ", min(focal_years), "–", max(focal_years), ")"),
+        subtitle = "augmented_mean − FIA_only_mean (Mg/ha)",
+        x = "Change in estimate (Mg/ha)",
+        y = "Hex count"
+      ) +
+      theme_minimal(base_size = 14)
+    ggsave(
+      fs::path(out_dir, paste0("est_change_hist_5y_", grid_name, ".png")),
+      p_change,
+      width = 8, height = 6, dpi = 300
+    )
+  }
   
   # write per-hex CSV
   write_csv(
@@ -388,7 +418,7 @@ compare_5y_window <- function(fia_df,
     fs::path(out_dir, paste0("summary_5y_", grid_name, ".csv"))
   )
   
-  # guidance text per scale
+  # guidance text per scale - FIXED: handle NA in median calculations
   guidance_df <- joined_5y %>%
     group_by(recommendation) %>%
     summarise(
@@ -400,6 +430,7 @@ compare_5y_window <- function(fia_df,
     ) %>%
     mutate(frac_hex = n_hex / sum(n_hex))
   
+  # Format guidance with NA handling
   guidance_lines <- c(
     paste0("Scale/grid: ", grid_name),
     paste0("Years pooled: ", min(focal_years), "-", max(focal_years),
@@ -410,12 +441,12 @@ compare_5y_window <- function(fia_df,
     "Recommendation categories across hexes:",
     paste(
       sprintf(
-        "- %s: %.1f%% of hexes | median fuzz_pressure=%.2f | median rel_uncertainty_drop=%.2f | median est_change=%.2f Mg/ha",
+        "- %s: %.1f%% of hexes | median fuzz_pressure=%s | median rel_uncertainty_drop=%s | median est_change=%s Mg/ha",
         guidance_df$recommendation,
         100 * guidance_df$frac_hex,
-        guidance_df$median_fuzz_pressure,
-        guidance_df$median_rel_unc_drop,
-        guidance_df$median_est_change
+        ifelse(is.na(guidance_df$median_fuzz_pressure), "NA", sprintf("%.2f", guidance_df$median_fuzz_pressure)),
+        ifelse(is.na(guidance_df$median_rel_unc_drop), "NA", sprintf("%.2f", guidance_df$median_rel_unc_drop)),
+        ifelse(is.na(guidance_df$median_est_change), "NA", sprintf("%.2f", guidance_df$median_est_change))
       ),
       collapse = "\n"
     ),
