@@ -17,8 +17,9 @@ ndvi:
   modis_pattern: "MODIS_NDVI_5yr_blocked_{start}_{end}.tif"
   s2_pattern: "S2_NDVI_10m_5yr_blocked_{start}_{end}.tif"
   
-  # Map FIA year windows to NDVI file windows
-  # Keys are "start_end" strings, values define file parameters
+  # Map FIA measurement years to NDVI file windows
+  # Non-overlapping 5-year blocks aligned with FIA panel design
+  # Plots measured in year Y get assigned to the block containing Y
   years_to_windows:
     "2000-2004":
       start: 2000
@@ -39,20 +40,10 @@ ndvi:
       start: 2015
       end: 2019
       has_modis: true
-      has_s2: false
-    "2016-2020":
-      start: 2016
-      end: 2020
-      has_modis: true
-      has_s2: true
+      has_s2: true  # S2 available from 2015+
     "2020-2024":
       start: 2020
       end: 2024
-      has_modis: true
-      has_s2: true
-    "2021-2025":
-      start: 2021
-      end: 2025
       has_modis: true
       has_s2: true
   
@@ -82,7 +73,7 @@ ndvi_modeling:
     - "rf"        # Random forest (optional, slower)
   
   # Response variable options
-  response: "aglb"  # "aglb" or "ndvi"
+  response: "aglb_Mg_per_ha"  # matches column name in your data
   
   # Include PRISM climate as covariates?
   include_climate: true

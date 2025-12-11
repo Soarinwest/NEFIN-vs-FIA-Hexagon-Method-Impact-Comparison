@@ -70,7 +70,7 @@ model_config <- config$ndvi_modeling %||% list()
 cv_method <- model_config$cv_method %||% "spatial_hex"
 cv_folds <- model_config$cv_folds %||% 5
 models_to_fit <- model_config$models %||% c("lm", "gam", "rf")
-response_var <- model_config$response %||% "aglb"
+response_var <- model_config$response %||% "aglb_Mg_per_ha"
 include_climate <- model_config$include_climate %||% TRUE
 min_plots_per_hex <- model_config$min_plots_per_hex %||% 3
 fuzz_pressure_quantiles <- model_config$fuzz_pressure_quantiles %||% c(0.25, 0.5, 0.75)
@@ -162,12 +162,31 @@ cli_h2("Preparing data for modeling")
 #' @param response Response variable name
 #' @param include_climate Whether to include climate covariates
 #' @param ndvi_vars Which NDVI variables to include
+#' @param hex_scale Which hex scale to use (e.g., "100ha", "1kha")
 #' @return Cleaned data frame ready for modeling
-prepare_model_data <- function(data, response = "aglb", include_climate = TRUE,
-                                ndvi_vars = c("ndvi_modis", "ndvi_s2")) {
+prepare_model_data <- function(data, response = "aglb_Mg_per_ha", include_climate = TRUE,
+                                ndvi_vars = c("ndvi_modis", "ndvi_s2"),
+                                hex_scale = "1kha") {
   
-  # Start with response and identifiers
-  keep_cols <- c("plot_id", "hex_id", "state", response)
+ # Build hex_id column name
+  hex_col <- paste0("hex_id_", hex_scale)
+  
+  # Start with identifiers - use actual column names from your data
+  # CN = plot ID, STATECD = state code
+  keep_cols <- c("CN", "STATECD", "MEASYEAR", response)
+  
+  # Add hex column if exists
+  if (hex_col %in% names(data)) {
+    keep_cols <- c(keep_cols, hex_col)
+  } else {
+    # Try to find any hex column
+    hex_cols_avail <- names(data)[grepl("^hex_id_", names(data))]
+    if (length(hex_cols_avail) > 0) {
+      hex_col <- hex_cols_avail[1]
+      keep_cols <- c(keep_cols, hex_col)
+      cli_alert_info("Using hex column: {hex_col}")
+    }
+  }
   
   # Add NDVI variables (use available ones)
   available_ndvi <- intersect(ndvi_vars, names(data))
@@ -181,11 +200,15 @@ prepare_model_data <- function(data, response = "aglb", include_climate = TRUE,
   available_sd <- intersect(ndvi_sd_cols, names(data))
   keep_cols <- c(keep_cols, available_sd)
   
-  # Add climate if requested
+  # Add climate if requested and available
   if (include_climate) {
-    climate_cols <- c("tmean_mean", "ppt_mean")
+    climate_cols <- c("tmean_mean", "ppt_mean", "tmean", "ppt")
     available_climate <- intersect(climate_cols, names(data))
-    keep_cols <- c(keep_cols, available_climate)
+    if (length(available_climate) > 0) {
+      keep_cols <- c(keep_cols, available_climate)
+    } else {
+      cli_alert_info("No climate columns found - proceeding without climate covariates")
+    }
   }
   
   # Add source indicator if present
@@ -198,6 +221,18 @@ prepare_model_data <- function(data, response = "aglb", include_climate = TRUE,
     select(any_of(keep_cols)) %>%
     filter(!is.na(.data[[response]])) %>%
     filter(if_any(all_of(available_ndvi), ~ !is.na(.)))
+  
+  # Rename hex column to standardized name for CV
+  if (hex_col %in% names(data_clean)) {
+    data_clean <- data_clean %>%
+      rename(hex_id = !!sym(hex_col))
+  }
+  
+  # Rename state column for consistency
+  if ("STATECD" %in% names(data_clean)) {
+    data_clean <- data_clean %>%
+      rename(state = STATECD)
+  }
   
   return(data_clean)
 }

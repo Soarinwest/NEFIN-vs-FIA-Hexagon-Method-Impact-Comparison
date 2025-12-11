@@ -34,6 +34,7 @@
 # ============================================================================
 
 suppressPackageStartupMessages({
+
   library(dplyr)
   library(readr)
   library(fs)
@@ -41,9 +42,43 @@ suppressPackageStartupMessages({
   library(tidyr)
 })
 
-source("R/utils_metrics.R")
-
 `%||%` <- function(a, b) if (!is.null(a)) a else b
+
+# Try to source utils_metrics.R, provide fallback if not found
+if (fs::file_exists("R/utils_metrics.R")) {
+  source("R/utils_metrics.R")
+} else {
+  message("Note: R/utils_metrics.R not found, using inline AGLB computation")
+  
+  # Inline fallback for build_plot_aglb
+  build_plot_aglb <- function(tree_path, plot_path) {
+    # Load data
+    tree <- readr::read_csv(tree_path, show_col_types = FALSE)
+    plot <- readr::read_csv(plot_path, show_col_types = FALSE)
+    
+    # Compute plot-level AGLB from tree data
+    # DRYBIO_AG is in lbs, TPA_UNADJ is trees per acre
+    # Convert to Mg/ha: lbs * 0.000453592 * trees_per_acre * 2.471054
+    tree_aglb <- tree |>
+      dplyr::filter(!is.na(DRYBIO_AG), !is.na(TPA_UNADJ), STATUSCD == 1) |>
+      dplyr::mutate(
+        # Biomass contribution per tree in Mg/ha
+        aglb_contrib = DRYBIO_AG * 0.000453592 * TPA_UNADJ * 2.471054
+      ) |>
+      dplyr::group_by(PLT_CN) |>
+      dplyr::summarise(
+        aglb_Mg_per_ha = sum(aglb_contrib, na.rm = TRUE),
+        .groups = "drop"
+      )
+    
+    # Join with plot metadata
+    plot_aglb <- plot |>
+      dplyr::select(CN, STATECD, MEASYEAR) |>
+      dplyr::left_join(tree_aglb, by = c("CN" = "PLT_CN"))
+    
+    plot_aglb
+  }
+}
 
 # ============================================================================
 # Build FIA AGLB at plot level
