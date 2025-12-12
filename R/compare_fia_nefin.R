@@ -11,6 +11,19 @@ suppressPackageStartupMessages({
 
 `%||%` <- function(a,b) if (!is.null(a)) a else b
 
+# Source scale name utilities
+if (file.exists("R/utils_scale_names.R")) {
+  source("R/utils_scale_names.R")
+} else {
+  # Inline fallback
+
+  standardize_scale_name <- function(x) {
+    x <- as.character(x)
+    x[tolower(x) == "fia"] <- "64kha"
+    x
+  }
+}
+
 # ------------------------------------------------------------
 # Load process.yml
 # ------------------------------------------------------------
@@ -60,6 +73,8 @@ hex_col_for_grid <- function(grid_name, nefin_cols) {
 #   "^.*/[0-9]{4}-[0-9]{2}-[0-9]{2}_.+_<grid>_W[0-9]+y$"
 #
 # We'll pick the newest by mtime.
+#
+# NOTE: Handles both "fia" and "64kha" naming - searches for both
 # ------------------------------------------------------------
 find_fia_results_for_grid <- function(grid_name, metric, level_window) {
   runs_dir <- "runs"
@@ -68,17 +83,29 @@ find_fia_results_for_grid <- function(grid_name, metric, level_window) {
   # window like "W5y"
   window_tag <- paste0("W", level_window, "y")
   
-  pattern <- paste0("_[", metric, "]{", nchar(metric), "}_") # no, that's wrong.
-  # Let's just do a simpler pattern: ends with _<grid>_<windowTag>
-  # where <grid> is exactly grid_name
-  # So we match dirs whose basename contains `_<grid_name>_W<window>y`
-  tag <- paste0("_", grid_name, "_", window_tag)
+  # Build list of names to search for (handle fia <-> 64kha mapping)
+  search_names <- grid_name
+  if (tolower(grid_name) == "fia") {
+    search_names <- c("fia", "64kha")
+  } else if (tolower(grid_name) == "64kha") {
+    search_names <- c("64kha", "fia")
+  }
   
-  candidates <- run_dirs[grepl(tag, run_dirs)]
+  # Search for each possible name
+  candidates <- character(0)
+  for (name in search_names) {
+    tag <- paste0("_", name, "_", window_tag)
+    matches <- run_dirs[grepl(tag, run_dirs, ignore.case = TRUE)]
+    candidates <- c(candidates, matches)
+  }
+  
+  candidates <- unique(candidates)
+  
   if (!length(candidates)) {
     stop("No FIA results directory matched grid='", grid_name,
          "' and window '", window_tag,
-         "'. Looked for '*", tag, "' in ", runs_dir)
+         "'. Looked for '*_", paste(search_names, collapse = "_' or '*_"), 
+         "_", window_tag, "' in ", runs_dir)
   }
   
   # pick most recent
@@ -309,6 +336,9 @@ compare_5y_window <- function(fia_df,
       )
     )
   
+  # Standardize grid_name (fia → 64kha)
+  grid_name_display <- standardize_scale_name(grid_name)
+  
   # per-hex recommendation
   joined_5y <- joined_5y %>%
     mutate(
@@ -336,7 +366,8 @@ compare_5y_window <- function(fia_df,
         
         TRUE ~ "MIXED_SIGNAL"
       ),
-      scale_name = grid_name,
+      # Use standardized scale name (fia → 64kha) in output
+      scale_name = grid_name_display,
       window_years = paste0(min(focal_years), "-", max(focal_years)),
       mc_reps = mc_reps,
       jitter_radius_m = cfg$jitter_radius_m,

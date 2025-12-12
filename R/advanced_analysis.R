@@ -1,11 +1,37 @@
 # R/advanced_analysis.R
 # Advanced statistical analysis of FIA error and NEFIN comparison
 # FIXED: Proper NA handling for division, correlation, and classification
+# FIXED: Scale naming (fia → 64kha) for proper ordering in figures
 
 suppressPackageStartupMessages({
   library(readr); library(dplyr); library(ggplot2); library(tidyr)
   library(broom); library(scales); library(viridis); library(patchwork); library(fs)
 })
+
+# Source scale name utilities
+if (file.exists("R/utils_scale_names.R")) {
+  source("R/utils_scale_names.R")
+} else {
+  # Inline fallback if utils not available
+  standardize_scale_name <- function(x) {
+    x <- as.character(x)
+    x[tolower(x) == "fia"] <- "64kha"
+    x
+  }
+  get_scale_order <- function() {
+    c("100ha", "500ha", "1kha", "5kha", "10kha", "50kha", "64kha", "100kha")
+  }
+  order_scales <- function(df, scale_col = "grid_scale") {
+    if (scale_col %in% names(df)) {
+      df[[scale_col]] <- standardize_scale_name(df[[scale_col]])
+      scale_order <- get_scale_order()
+      existing <- unique(df[[scale_col]])
+      ordered_levels <- scale_order[scale_order %in% existing]
+      df[[scale_col]] <- factor(df[[scale_col]], levels = ordered_levels, ordered = TRUE)
+    }
+    df
+  }
+}
 
 # =============================================================================
 # HELPER FUNCTIONS FOR SAFE CALCULATIONS
@@ -73,11 +99,16 @@ advanced_analysis <- function(consolidated_dir = NULL,
   nefin_file <- fs::path(consolidated_dir, "fia_nefin_comparison_all_scales.csv")
   
   fia <- readr::read_csv(fia_file, show_col_types = FALSE)
+  
+  # Standardize scale names (fia → 64kha) and order properly
+  fia <- order_scales(fia, "grid_scale")
+  
   cat("  ✓ FIA results loaded: ", nrow(fia), " rows\n")
   
   has_nefin <- fs::file_exists(nefin_file)
   nefin <- if (has_nefin) {
-    readr::read_csv(nefin_file, show_col_types = FALSE)
+    df <- readr::read_csv(nefin_file, show_col_types = FALSE)
+    order_scales(df, "grid_scale")
   } else NULL
   
   if (has_nefin) cat("  ✓ NEFIN comparison loaded: ", nrow(nefin), " rows\n")
