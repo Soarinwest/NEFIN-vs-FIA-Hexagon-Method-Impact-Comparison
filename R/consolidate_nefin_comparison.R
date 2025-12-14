@@ -125,6 +125,13 @@ consolidate_nefin_results <- function(runs_dir = "runs",
       n_plots_nefin = nefin_n_5y,
       diff = nefin_mean_5y - fia_only_mean,
       
+      # Percent difference (relative to FIA)
+      pct_diff = dplyr::case_when(
+        is.na(fia_only_mean) | is.na(nefin_mean_5y) ~ NA_real_,
+        fia_only_mean == 0 ~ NA_real_,
+        TRUE ~ 100 * (nefin_mean_5y - fia_only_mean) / fia_only_mean
+      ),
+      
       # Add year_label if missing (use middle of window)
       year_label = if ("year_label" %in% names(.)) year_label else 2022
     )

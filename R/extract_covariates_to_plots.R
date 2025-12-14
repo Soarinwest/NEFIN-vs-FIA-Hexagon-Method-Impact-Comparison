@@ -1,640 +1,480 @@
 #!/usr/bin/env Rscript
-# ==============================================================================
-# extract_covariates_to_plots.R
-# ==============================================================================
-# Purpose:
-#   Extract PRISM climate (tmean, ppt) and NDVI (MODIS, Sentinel-2) values
-#   to plot locations for FIA (jittered) and NEFIN (true coords).
-#
-# Fixed: Uses terra for all spatial operations to avoid CRS transformation issues
-#
-# Usage:
-#   Rscript R/extract_covariates_to_plots.R [--overwrite] [--max-reps=N]
-#
-# ==============================================================================
+# R/extract_covariates_to_plots.R
+# Extract climate (PRISM) and NDVI covariates to plot locations
+# Works with existing manually downloaded TIFFs
 
 suppressPackageStartupMessages({
   library(terra)
+  library(sf)
   library(dplyr)
   library(readr)
   library(fs)
-  library(yaml)
-  library(glue)
-  library(purrr)
+  library(tidyr)
 })
 
-`%||%` <- function(a, b) if (!is.null(a)) a else b
-
-# ==============================================================================
-# Hardcoded Paths (matching your actual structure)
-# ==============================================================================
-
-PATHS <- list(
-  # PRISM climate
-  prism_dir = "data/processed/prism",
-  prism_tmean_pattern = "prism_tmean_ne_{start}_{end}.tif",
-  prism_ppt_pattern = "prism_ppt_ne_{start}_{end}.tif",
+extract_covariates_to_plots <- function(
+    plot_assignments_path = "data/processed/plot_hex_assignments.csv",
+    prism_dir = "data/processed/prism",
+    ndvi_dir = "data/processed/ndvi",
+    output_dir = "data/processed",
+    use_jittered = FALSE,
+    jitter_rep = 1,
+    overwrite = FALSE
+) {
+  
+  cat("\n")
+  cat("╔══════════════════════════════════════════════════════════╗\n")
+  cat("║  Extract Covariates to Plot Locations                    ║\n")
+  cat("╚══════════════════════════════════════════════════════════╝\n")
+  cat("\n")
+  
+  # =========================================================================
+  # Load plot data
+  # =========================================================================
+  
+  if (use_jittered) {
+    # Use jittered coordinates from MC library
+    jitter_file <- sprintf("data/processed/mc_jitter_library/replicates/rep_%04d.csv", jitter_rep)
+    if (!fs::file_exists(jitter_file)) {
+      stop("Jitter replicate file not found: ", jitter_file)
+    }
+    cat("→ Loading jittered coordinates (replicate", jitter_rep, ")...\n")
+    plots <- readr::read_csv(jitter_file, show_col_types = FALSE)
+    lon_col <- "lon_jittered"
+    lat_col <- "lat_jittered"
+  } else {
+    # Use original (fuzzed) FIA coordinates
+    cat("→ Loading plot assignments...\n")
+    plots <- readr::read_csv(plot_assignments_path, show_col_types = FALSE)
+    lon_col <- "LON"
+    lat_col <- "LAT"
+  }
+  
+  cat("  Loaded", nrow(plots), "plots\n")
+  
+  # Check for coordinate columns
+  if (!lon_col %in% names(plots) || !lat_col %in% names(plots)) {
+    # Try alternative names
+    if ("lon" %in% names(plots)) lon_col <- "lon"
+    if ("lat" %in% names(plots)) lat_col <- "lat"
+    if ("longitude" %in% names(plots)) lon_col <- "longitude"
+    if ("latitude" %in% names(plots)) lat_col <- "latitude"
+  }
+  
+  if (!lon_col %in% names(plots) || !lat_col %in% names(plots)) {
+    stop("Cannot find longitude/latitude columns. Available: ", paste(names(plots), collapse = ", "))
+  }
+  
+  cat("  Using coordinates:", lon_col, "/", lat_col, "\n")
+  
+  # Filter out rows with missing coordinates
+  plots_valid <- plots %>%
+    filter(!is.na(.data[[lon_col]]), !is.na(.data[[lat_col]]))
+  
+  cat("  Valid coordinates:", nrow(plots_valid), "of", nrow(plots), "\n")
+  
+  # Convert to spatial points (WGS84)
+  cat("\n→ Converting to spatial points...\n")
+  plots_sf <- st_as_sf(plots_valid, 
+                       coords = c(lon_col, lat_col), 
+                       crs = 4326)
+  
+  # Get bounding box for diagnostics
+  bbox <- st_bbox(plots_sf)
+  cat("  Bounding box (WGS84):\n")
+  cat("    Lon:", round(bbox["xmin"], 2), "to", round(bbox["xmax"], 2), "\n")
+  cat("    Lat:", round(bbox["ymin"], 2), "to", round(bbox["ymax"], 2), "\n")
+  
+  # =========================================================================
+  # Extract PRISM climate data
+  # =========================================================================
+  
+  cat("\n")
+  cat("═══════════════════════════════════════════════════════════\n")
+  cat("Extracting PRISM Climate Data\n")
+  cat("═══════════════════════════════════════════════════════════\n")
+  
+  prism_files <- list.files(prism_dir, pattern = "\\.tif$", full.names = TRUE)
+  
+  if (length(prism_files) == 0) {
+    cat("  ⚠ No PRISM TIF files found in", prism_dir, "\n")
+    plots_valid$tmean <- NA_real_
+    plots_valid$ppt <- NA_real_
+  } else {
+    cat("  Found", length(prism_files), "PRISM files:\n")
+    for (f in prism_files) cat("    -", basename(f), "\n")
+    
+    # Determine which time period to use based on MEASYEAR
+    # Map measurement years to PRISM windows
+    plots_valid <- plots_valid %>%
+      mutate(
+        prism_window = case_when(
+          MEASYEAR >= 2020 ~ "2020_2024",
+          MEASYEAR >= 2015 ~ "2015_2019",
+          MEASYEAR >= 2010 ~ "2010_2014",
+          MEASYEAR >= 2005 ~ "2005_2009",
+          TRUE ~ "2000_2004"
+        )
+      )
+    
+    # Initialize columns
+    plots_valid$tmean <- NA_real_
+    plots_valid$ppt <- NA_real_
+    
+    # Process each time window
+    for (window in unique(plots_valid$prism_window)) {
+      cat("\n  Processing window:", window, "\n")
+      
+      idx <- which(plots_valid$prism_window == window)
+      if (length(idx) == 0) next
+      
+      cat("    Plots in window:", length(idx), "\n")
+      
+      # Find matching files
+      tmean_file <- prism_files[grepl(paste0("tmean.*", window), prism_files)]
+      ppt_file <- prism_files[grepl(paste0("ppt.*", window), prism_files)]
+      
+      # Extract tmean
+      if (length(tmean_file) == 1) {
+        cat("    Loading:", basename(tmean_file), "\n")
+        r_tmean <- terra::rast(tmean_file)
+        
+        # Check CRS and reproject points if needed
+        pts_window <- plots_sf[idx, ]
+        if (!identical(st_crs(pts_window)$wkt, crs(r_tmean))) {
+          cat("    Reprojecting points to raster CRS...\n")
+          pts_window <- st_transform(pts_window, crs(r_tmean))
+        }
+        
+        # Extract values
+        vals <- terra::extract(r_tmean, terra::vect(pts_window))
+        
+        # Get the value column (might be named differently)
+        val_col <- names(vals)[2]  # First col is ID
+        if (!is.null(val_col)) {
+          plots_valid$tmean[idx] <- vals[[val_col]]
+          n_valid <- sum(!is.na(vals[[val_col]]))
+          cat("    Extracted tmean:", n_valid, "valid values\n")
+        }
+      } else {
+        cat("    ⚠ tmean file not found for window", window, "\n")
+      }
+      
+      # Extract ppt
+      if (length(ppt_file) == 1) {
+        cat("    Loading:", basename(ppt_file), "\n")
+        r_ppt <- terra::rast(ppt_file)
+        
+        pts_window <- plots_sf[idx, ]
+        if (!identical(st_crs(pts_window)$wkt, crs(r_ppt))) {
+          pts_window <- st_transform(pts_window, crs(r_ppt))
+        }
+        
+        vals <- terra::extract(r_ppt, terra::vect(pts_window))
+        val_col <- names(vals)[2]
+        if (!is.null(val_col)) {
+          plots_valid$ppt[idx] <- vals[[val_col]]
+          n_valid <- sum(!is.na(vals[[val_col]]))
+          cat("    Extracted ppt:", n_valid, "valid values\n")
+        }
+      } else {
+        cat("    ⚠ ppt file not found for window", window, "\n")
+      }
+    }
+    
+    cat("\n  Climate extraction summary:\n")
+    cat("    tmean: ", sum(!is.na(plots_valid$tmean)), "/", nrow(plots_valid), "valid\n")
+    cat("    ppt:   ", sum(!is.na(plots_valid$ppt)), "/", nrow(plots_valid), "valid\n")
+  }
+  
+  # =========================================================================
+  # Extract NDVI data
+  # =========================================================================
+  
+  cat("\n")
+  cat("═══════════════════════════════════════════════════════════\n")
+  cat("Extracting NDVI Data\n")
+  cat("═══════════════════════════════════════════════════════════\n")
   
   # MODIS NDVI
-  modis_dir = "data/processed/ndvi/modis",
-  modis_pattern = "MODIS_NDVI_5yr_blocked_{start}_{end}.tif",
+  modis_dir <- fs::path(ndvi_dir, "modis")
+  modis_files <- if (fs::dir_exists(modis_dir)) {
+    list.files(modis_dir, pattern = "\\.tif$", full.names = TRUE)
+  } else {
+    list.files(ndvi_dir, pattern = "MODIS.*\\.tif$", full.names = TRUE)
+  }
+  
+  plots_valid$ndvi_modis <- NA_real_
+  
+  if (length(modis_files) > 0) {
+    cat("  Found", length(modis_files), "MODIS NDVI files:\n")
+    for (f in modis_files) cat("    -", basename(f), "\n")
+    
+    # Map years to MODIS windows
+    plots_valid <- plots_valid %>%
+      mutate(
+        modis_window = case_when(
+          MEASYEAR >= 2020 ~ "2020_2024",
+          MEASYEAR >= 2015 ~ "2015_2019",
+          MEASYEAR >= 2010 ~ "2010_2014",
+          MEASYEAR >= 2005 ~ "2005_2009",
+          TRUE ~ "2000_2004"
+        )
+      )
+    
+    for (window in unique(plots_valid$modis_window)) {
+      cat("\n  Processing MODIS window:", window, "\n")
+      
+      idx <- which(plots_valid$modis_window == window)
+      if (length(idx) == 0) next
+      
+      # Find matching file
+      modis_file <- modis_files[grepl(window, modis_files)]
+      
+      if (length(modis_file) == 1) {
+        cat("    Loading:", basename(modis_file), "\n")
+        r_ndvi <- terra::rast(modis_file)
+        
+        pts_window <- plots_sf[idx, ]
+        if (!identical(st_crs(pts_window)$wkt, crs(r_ndvi))) {
+          cat("    Reprojecting points to raster CRS...\n")
+          pts_window <- st_transform(pts_window, crs(r_ndvi))
+        }
+        
+        vals <- terra::extract(r_ndvi, terra::vect(pts_window))
+        val_col <- names(vals)[2]
+        if (!is.null(val_col)) {
+          plots_valid$ndvi_modis[idx] <- vals[[val_col]]
+          n_valid <- sum(!is.na(vals[[val_col]]))
+          cat("    Extracted:", n_valid, "valid values\n")
+        }
+      } else {
+        cat("    ⚠ MODIS file not found for window", window, "\n")
+      }
+    }
+    
+    cat("\n  MODIS NDVI: ", sum(!is.na(plots_valid$ndvi_modis)), "/", nrow(plots_valid), "valid\n")
+  } else {
+    cat("  ⚠ No MODIS NDVI files found\n")
+  }
   
   # Sentinel-2 NDVI
-  s2_dir = "data/processed/ndvi/s2",
-  s2_pattern = "ndvi_{start}_{end}_raw.tif",
-  
-  # Plot data
-  jitter_dir = "data/processed/mc_jitter_library/replicates",
-  nefin_file = "data/processed/nefin_processed.csv",
-  fia_plot_file = "data/interim/fia_region/plot.csv",
-  
-  # Outputs
-  ndvi_out_dir = "data/processed/ndvi_at_plots",
-  climate_out_dir = "data/processed/climate_at_plots"
-)
-
-# Temporal windows (5-year blocks)
-WINDOWS <- list(
-  list(name = "2000_2004", start = 2000, end = 2004, 
-       has_modis = TRUE, has_s2 = FALSE, has_prism = TRUE),
-  list(name = "2005_2009", start = 2005, end = 2009, 
-       has_modis = TRUE, has_s2 = FALSE, has_prism = TRUE),
-  list(name = "2010_2014", start = 2010, end = 2014, 
-       has_modis = TRUE, has_s2 = FALSE, has_prism = TRUE),
-  list(name = "2015_2019", start = 2015, end = 2019, 
-       has_modis = TRUE, has_s2 = FALSE, has_prism = TRUE),
-  list(name = "2016_2019", start = 2016, end = 2019, 
-       has_modis = FALSE, has_s2 = TRUE, has_prism = FALSE),
-  list(name = "2020_2024", start = 2020, end = 2024, 
-       has_modis = TRUE, has_s2 = TRUE, has_prism = TRUE)
-)
-
-# ==============================================================================
-# Raster Discovery
-# ==============================================================================
-
-discover_rasters <- function() {
-  
-  rasters <- list()
-  
-  for (w in WINDOWS) {
-    # PRISM tmean
-    if (w$has_prism) {
-      path <- fs::path(PATHS$prism_dir, 
-                       glue(PATHS$prism_tmean_pattern, start = w$start, end = w$end))
-      rasters[[length(rasters) + 1]] <- list(
-        product = "prism", variable = "tmean",
-        window = w$name, start = w$start, end = w$end,
-        path = as.character(path), exists = fs::file_exists(path)
-      )
-      
-      # PRISM ppt
-      path <- fs::path(PATHS$prism_dir,
-                       glue(PATHS$prism_ppt_pattern, start = w$start, end = w$end))
-      rasters[[length(rasters) + 1]] <- list(
-        product = "prism", variable = "ppt",
-        window = w$name, start = w$start, end = w$end,
-        path = as.character(path), exists = fs::file_exists(path)
-      )
-    }
-    
-    # MODIS NDVI
-    if (w$has_modis) {
-      path <- fs::path(PATHS$modis_dir,
-                       glue(PATHS$modis_pattern, start = w$start, end = w$end))
-      rasters[[length(rasters) + 1]] <- list(
-        product = "modis", variable = "ndvi",
-        window = w$name, start = w$start, end = w$end,
-        path = as.character(path), exists = fs::file_exists(path)
-      )
-    }
-    
-    # Sentinel-2 NDVI
-    if (w$has_s2) {
-      path <- fs::path(PATHS$s2_dir,
-                       glue(PATHS$s2_pattern, start = w$start, end = w$end))
-      rasters[[length(rasters) + 1]] <- list(
-        product = "s2", variable = "ndvi",
-        window = w$name, start = w$start, end = w$end,
-        path = as.character(path), exists = fs::file_exists(path)
-      )
-    }
-  }
-  
-  # Convert to data frame
-  bind_rows(lapply(rasters, as.data.frame))
-}
-
-# ==============================================================================
-# Year-to-Window Mapping
-# ==============================================================================
-
-map_year_to_window <- function(year) {
-  if (is.na(year)) return(NA_character_)
-  
-  # Standard 5-year blocks for MODIS/PRISM
-  if (year >= 2000 && year <= 2004) return("2000_2004")
-  if (year >= 2005 && year <= 2009) return("2005_2009")
-  if (year >= 2010 && year <= 2014) return("2010_2014")
-  if (year >= 2015 && year <= 2019) return("2015_2019")
-  if (year >= 2020 && year <= 2024) return("2020_2024")
-  
- # Outside known windows - find closest
-  if (year < 2000) return("2000_2004")
-  if (year > 2024) return("2020_2024")
-  
-  NA_character_
-}
-
-# For S2, need special handling (only 2016-2019 and 2020-2024)
-map_year_to_s2_window <- function(year) {
-  if (is.na(year)) return(NA_character_)
-  if (year >= 2016 && year <= 2019) return("2016_2019")
-  if (year >= 2020 && year <= 2024) return("2020_2024")
-  NA_character_
-}
-
-# ==============================================================================
-# Extraction Function (using terra only - avoids sf CRS issues)
-# ==============================================================================
-
-extract_raster_values_terra <- function(lon, lat, raster_path) {
-  # Extract values using terra only (no sf transformation)
-  
-  if (!fs::file_exists(raster_path)) {
-    return(rep(NA_real_, length(lon)))
-  }
-  
-  r <- tryCatch({
-    terra::rast(raster_path)
-  }, error = function(e) {
-    warning("Failed to load: ", raster_path, " - ", e$message)
-    return(NULL)
-  })
-  
-  if (is.null(r)) return(rep(NA_real_, length(lon)))
-  
-  # Create points in WGS84
-  pts <- terra::vect(
-    data.frame(x = lon, y = lat),
-    geom = c("x", "y"),
-    crs = "EPSG:4326"
-  )
-  
-  # Project points to raster CRS using terra (more robust)
-  raster_crs <- terra::crs(r)
-  
-  pts_proj <- tryCatch({
-    terra::project(pts, raster_crs)
-  }, error = function(e) {
-    # If projection fails, try using EPSG:5070 (Albers) as fallback
-    message("    CRS projection issue, trying EPSG:5070 fallback...")
-    tryCatch({
-      terra::project(pts, "EPSG:5070")
-    }, error = function(e2) {
-      warning("Could not project points: ", e2$message)
-      return(NULL)
-    })
-  })
-  
-  if (is.null(pts_proj)) return(rep(NA_real_, length(lon)))
-  
-  # Extract values
-  vals <- tryCatch({
-    terra::extract(r, pts_proj)
-  }, error = function(e) {
-    warning("Extraction failed: ", e$message)
-    return(NULL)
-  })
-  
-  if (is.null(vals) || ncol(vals) < 2) {
-    return(rep(NA_real_, length(lon)))
-  }
-  
-  as.numeric(vals[[2]])
-}
-
-# ==============================================================================
-# Batch extraction for a single raster (more efficient)
-# ==============================================================================
-
-extract_single_raster <- function(lon, lat, raster_path, chunk_size = 10000) {
-  # For large datasets, extract in chunks to avoid memory issues
-  
-  n <- length(lon)
-  if (n == 0) return(numeric(0))
-  
-  if (n <= chunk_size) {
-    return(extract_raster_values_terra(lon, lat, raster_path))
-  }
-  
-  # Process in chunks
-  result <- numeric(n)
-  n_chunks <- ceiling(n / chunk_size)
-  
-  for (i in seq_len(n_chunks)) {
-    start_idx <- (i - 1) * chunk_size + 1
-    end_idx <- min(i * chunk_size, n)
-    
-    result[start_idx:end_idx] <- extract_raster_values_terra(
-      lon[start_idx:end_idx],
-      lat[start_idx:end_idx],
-      raster_path
-    )
-  }
-  
-  result
-}
-
-# ==============================================================================
-# FIA Extraction
-# ==============================================================================
-
-extract_fia <- function(raster_inv, max_reps = NULL) {
-  
-  message("\n", strrep("=", 60))
-  message("EXTRACTING FOR FIA PLOTS (JITTERED)")
-  message(strrep("=", 60), "\n")
-  
-  # Get replicate files
-  rep_files <- list.files(PATHS$jitter_dir, pattern = "^rep_\\d+\\.csv$", 
-                          full.names = TRUE)
-  rep_files <- sort(rep_files)
-  message("Found ", length(rep_files), " jitter replicates")
-  
-  if (!is.null(max_reps) && max_reps < length(rep_files)) {
-    rep_files <- rep_files[1:max_reps]
-    message("Processing first ", max_reps, " only")
-  }
-  
-  # Load FIA plot metadata for MEASYEAR
-  if (fs::file_exists(PATHS$fia_plot_file)) {
-    plot_meta <- read_csv(PATHS$fia_plot_file, show_col_types = FALSE) %>%
-      select(CN, STATECD, MEASYEAR) %>%
-      distinct()
-    message("Plot metadata: ", nrow(plot_meta), " plots")
+  s2_dir <- fs::path(ndvi_dir, "s2")
+  s2_files <- if (fs::dir_exists(s2_dir)) {
+    list.files(s2_dir, pattern = "\\.tif$", full.names = TRUE)
   } else {
-    stop("FIA plot.csv not found: ", PATHS$fia_plot_file)
+    list.files(ndvi_dir, pattern = "s2.*\\.tif$|sentinel.*\\.tif$", full.names = TRUE, ignore.case = TRUE)
   }
   
-  # Filter available rasters
-  available <- raster_inv %>% filter(exists)
-  message("\nAvailable rasters: ", nrow(available))
+  plots_valid$ndvi_s2 <- NA_real_
   
-  # Pre-load raster paths by window for efficiency
-  raster_lookup <- list()
-  for (i in 1:nrow(available)) {
-    key <- paste(available$product[i], available$variable[i], available$window[i], sep = "_")
-    raster_lookup[[key]] <- available$path[i]
+  if (length(s2_files) > 0) {
+    cat("\n  Found", length(s2_files), "Sentinel-2 NDVI files:\n")
+    for (f in s2_files) cat("    -", basename(f), "\n")
+    
+    # For S2, just use the first/only file (typically covers 2016-2019)
+    s2_file <- s2_files[1]
+    cat("    Loading:", basename(s2_file), "\n")
+    r_s2 <- terra::rast(s2_file)
+    
+    # Only extract for plots in relevant years (2016-2019)
+    idx_s2 <- which(plots_valid$MEASYEAR >= 2016 & plots_valid$MEASYEAR <= 2019)
+    
+    if (length(idx_s2) > 0) {
+      pts_s2 <- plots_sf[idx_s2, ]
+      if (!identical(st_crs(pts_s2)$wkt, crs(r_s2))) {
+        cat("    Reprojecting points to raster CRS...\n")
+        pts_s2 <- st_transform(pts_s2, crs(r_s2))
+      }
+      
+      vals <- terra::extract(r_s2, terra::vect(pts_s2))
+      val_col <- names(vals)[2]
+      if (!is.null(val_col)) {
+        plots_valid$ndvi_s2[idx_s2] <- vals[[val_col]]
+        n_valid <- sum(!is.na(vals[[val_col]]))
+        cat("    Extracted:", n_valid, "valid values for 2016-2019 plots\n")
+      }
+    }
+    
+    cat("\n  Sentinel-2 NDVI: ", sum(!is.na(plots_valid$ndvi_s2)), "/", nrow(plots_valid), "valid\n")
+  } else {
+    cat("  ⚠ No Sentinel-2 NDVI files found\n")
   }
   
-  # Storage
-  all_results <- list()
+  # =========================================================================
+  # Save results
+  # =========================================================================
   
-  start_time <- Sys.time()
+  cat("\n")
+  cat("═══════════════════════════════════════════════════════════\n")
+  cat("Saving Results\n")
+  cat("═══════════════════════════════════════════════════════════\n")
   
-  for (rep_idx in seq_along(rep_files)) {
-    rep_file <- rep_files[rep_idx]
-    rep_id <- as.integer(gsub(".*rep_(\\d+)\\.csv", "\\1", basename(rep_file)))
-    
-    # Progress
-    elapsed <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
-    if (rep_idx > 1) {
-      rate <- (rep_idx - 1) / elapsed
-      eta <- (length(rep_files) - rep_idx) / rate / 60
-      message(sprintf("  Rep %d/%d (%.0f%%) - ETA: %.1f min",
-                      rep_idx, length(rep_files),
-                      100 * rep_idx / length(rep_files), eta))
-    } else {
-      message(sprintf("  Rep %d/%d", rep_idx, length(rep_files)))
-    }
-    
-    # Load replicate
-    rep_data <- read_csv(rep_file, show_col_types = FALSE)
-    
-    # Add replicate_id if not present
-    if (!"replicate_id" %in% names(rep_data)) {
-      rep_data$replicate_id <- rep_id
-    }
-    
-    # Join MEASYEAR if not present
-    if (!"MEASYEAR" %in% names(rep_data)) {
-      rep_data <- rep_data %>%
-        left_join(plot_meta %>% select(CN, MEASYEAR), by = "CN")
-    }
-    
-    # Map to windows
-    rep_data <- rep_data %>%
-      mutate(
-        window_modis = sapply(MEASYEAR, map_year_to_window),
-        window_s2 = sapply(MEASYEAR, map_year_to_s2_window)
-      )
-    
-    # Filter valid coords
-    valid_idx <- !is.na(rep_data$lon_jittered) & !is.na(rep_data$lat_jittered)
-    if (sum(valid_idx) == 0) {
-      message("    No valid coordinates, skipping")
-      next
-    }
-    
-    rep_valid <- rep_data[valid_idx, ]
-    
-    # Initialize result columns
-    rep_valid$tmean <- NA_real_
-    rep_valid$ppt <- NA_real_
-    rep_valid$ndvi_modis <- NA_real_
-    rep_valid$ndvi_s2 <- NA_real_
-    
-    # Extract by window (MODIS/PRISM use same windows)
-    for (window in unique(na.omit(rep_valid$window_modis))) {
-      idx <- which(rep_valid$window_modis == window & !is.na(rep_valid$window_modis))
-      if (length(idx) == 0) next
-      
-      lon <- rep_valid$lon_jittered[idx]
-      lat <- rep_valid$lat_jittered[idx]
-      
-      # PRISM tmean
-      key <- paste("prism", "tmean", window, sep = "_")
-      if (!is.null(raster_lookup[[key]])) {
-        rep_valid$tmean[idx] <- extract_single_raster(lon, lat, raster_lookup[[key]])
-      }
-      
-      # PRISM ppt
-      key <- paste("prism", "ppt", window, sep = "_")
-      if (!is.null(raster_lookup[[key]])) {
-        rep_valid$ppt[idx] <- extract_single_raster(lon, lat, raster_lookup[[key]])
-      }
-      
-      # MODIS NDVI
-      key <- paste("modis", "ndvi", window, sep = "_")
-      if (!is.null(raster_lookup[[key]])) {
-        rep_valid$ndvi_modis[idx] <- extract_single_raster(lon, lat, raster_lookup[[key]])
-      }
-    }
-    
-    # S2 extraction (different windows)
-    for (window in unique(na.omit(rep_valid$window_s2))) {
-      idx <- which(rep_valid$window_s2 == window & !is.na(rep_valid$window_s2))
-      if (length(idx) == 0) next
-      
-      lon <- rep_valid$lon_jittered[idx]
-      lat <- rep_valid$lat_jittered[idx]
-      
-      key <- paste("s2", "ndvi", window, sep = "_")
-      if (!is.null(raster_lookup[[key]])) {
-        rep_valid$ndvi_s2[idx] <- extract_single_raster(lon, lat, raster_lookup[[key]])
-      }
-    }
-    
-    # Store results
-    all_results[[rep_idx]] <- rep_valid
+  # Create output directories
+  climate_dir <- fs::path(output_dir, "climate_at_plots")
+  ndvi_out_dir <- fs::path(output_dir, "ndvi_at_plots")
+  fs::dir_create(climate_dir, recurse = TRUE)
+  fs::dir_create(ndvi_out_dir, recurse = TRUE)
+  
+  # Select output columns
+  id_cols <- c("CN", "STATECD", "MEASYEAR")
+  if (use_jittered) {
+    id_cols <- c(id_cols, "replicate_id", "lon_jittered", "lat_jittered")
   }
   
-  # Combine all results
-  combined <- bind_rows(all_results)
+  # Hex columns if present
+  hex_cols <- names(plots_valid)[grepl("^hex_id_", names(plots_valid))]
   
-  message("\nFIA extraction complete:")
-  message("  Total records: ", format(nrow(combined), big.mark = ","))
-  message("  With NDVI (MODIS): ", format(sum(!is.na(combined$ndvi_modis)), big.mark = ","))
-  message("  With climate: ", format(sum(!is.na(combined$tmean)), big.mark = ","))
+  # Climate output
+  climate_out <- plots_valid %>%
+    select(all_of(c(id_cols, hex_cols, "tmean", "ppt")))
   
-  # Split into climate and NDVI outputs
-  base_cols <- c("CN", "STATECD", "MEASYEAR", "replicate_id", 
-                 "lon_jittered", "lat_jittered", "window_modis")
-  base_cols <- intersect(base_cols, names(combined))
+  climate_file <- fs::path(climate_dir, "fia_climate.csv")
+  readr::write_csv(climate_out, climate_file)
+  cat("  ✓ Wrote:", climate_file, "\n")
   
-  # Add hex columns if present
-  hex_cols <- names(combined)[grepl("^hex_id_", names(combined))]
-  base_cols <- c(base_cols, hex_cols)
+  # NDVI output
+  ndvi_out <- plots_valid %>%
+    select(all_of(c(id_cols, hex_cols, "ndvi_modis", "ndvi_s2")))
   
-  climate_df <- combined %>% select(all_of(base_cols), tmean, ppt)
-  ndvi_df <- combined %>% select(all_of(base_cols), ndvi_modis, ndvi_s2)
+  ndvi_file <- fs::path(ndvi_out_dir, "fia_ndvi.csv")
+  readr::write_csv(ndvi_out, ndvi_file)
+  cat("  ✓ Wrote:", ndvi_file, "\n")
   
-  list(climate = climate_df, ndvi = ndvi_df)
+  # Combined output
+  combined_out <- plots_valid %>%
+    select(all_of(c(id_cols, hex_cols, "tmean", "ppt", "ndvi_modis", "ndvi_s2")))
+  
+  combined_file <- fs::path(output_dir, "fia_covariates.csv")
+  readr::write_csv(combined_out, combined_file)
+  cat("  ✓ Wrote:", combined_file, "\n")
+  
+  # =========================================================================
+  # Summary
+  # =========================================================================
+  
+  cat("\n")
+  cat("╔══════════════════════════════════════════════════════════╗\n")
+  cat("║  EXTRACTION COMPLETE                                      ║\n")
+  cat("╚══════════════════════════════════════════════════════════╝\n")
+  cat("\n")
+  
+  cat("Summary:\n")
+  cat("  Total plots:", nrow(plots_valid), "\n")
+  cat("  tmean:      ", sum(!is.na(plots_valid$tmean)), "valid (", 
+      round(100 * sum(!is.na(plots_valid$tmean)) / nrow(plots_valid), 1), "%)\n")
+  cat("  ppt:        ", sum(!is.na(plots_valid$ppt)), "valid (",
+      round(100 * sum(!is.na(plots_valid$ppt)) / nrow(plots_valid), 1), "%)\n")
+  cat("  ndvi_modis: ", sum(!is.na(plots_valid$ndvi_modis)), "valid (",
+      round(100 * sum(!is.na(plots_valid$ndvi_modis)) / nrow(plots_valid), 1), "%)\n")
+  cat("  ndvi_s2:    ", sum(!is.na(plots_valid$ndvi_s2)), "valid (",
+      round(100 * sum(!is.na(plots_valid$ndvi_s2)) / nrow(plots_valid), 1), "%)\n")
+  
+  cat("\nOutput files:\n")
+  cat("  ", climate_file, "\n")
+  cat("  ", ndvi_file, "\n")
+  cat("  ", combined_file, "\n")
+  
+  invisible(combined_out)
 }
 
-# ==============================================================================
-# NEFIN Extraction
-# ==============================================================================
+# =============================================================================
+# Also extract for NEFIN plots
+# =============================================================================
 
-extract_nefin <- function(raster_inv) {
+extract_covariates_to_nefin <- function(
+    nefin_path = "data/processed/nefin_processed.csv",
+    prism_dir = "data/processed/prism",
+    ndvi_dir = "data/processed/ndvi",
+    output_dir = "data/processed"
+) {
   
-  message("\n", strrep("=", 60))
-  message("EXTRACTING FOR NEFIN PLOTS (TRUE COORDS)")
-  message(strrep("=", 60), "\n")
+  cat("\n")
+  cat("═══════════════════════════════════════════════════════════\n")
+  cat("Extracting Covariates for NEFIN Plots\n")
+  cat("═══════════════════════════════════════════════════════════\n")
   
-  if (!fs::file_exists(PATHS$nefin_file)) {
-    message("NEFIN file not found: ", PATHS$nefin_file)
-    return(list(climate = NULL, ndvi = NULL))
+  if (!fs::file_exists(nefin_path)) {
+    cat("  ⚠ NEFIN data not found:", nefin_path, "\n")
+    return(invisible(NULL))
   }
   
-  nefin <- read_csv(PATHS$nefin_file, show_col_types = FALSE)
-  message("NEFIN plots: ", nrow(nefin))
+  nefin <- readr::read_csv(nefin_path, show_col_types = FALSE)
+  cat("  Loaded", nrow(nefin), "NEFIN plots\n")
   
-  # Identify coordinate columns
-  if ("lon_public" %in% names(nefin)) {
-    lon_col <- "lon_public"
-    lat_col <- "lat_public"
-  } else if ("lon" %in% names(nefin)) {
-    lon_col <- "lon"
-    lat_col <- "lat"
-  } else {
-    stop("Cannot find coordinate columns in NEFIN data")
-  }
-  message("Using coordinates: ", lon_col, ", ", lat_col)
+  # Find coordinate columns
+  lon_col <- if ("LON" %in% names(nefin)) "LON" else if ("lon" %in% names(nefin)) "lon" else "longitude"
+  lat_col <- if ("LAT" %in% names(nefin)) "LAT" else if ("lat" %in% names(nefin)) "lat" else "latitude"
   
-  # Map years to windows
-  nefin <- nefin %>%
-    mutate(
-      window_modis = sapply(MEASYEAR, map_year_to_window),
-      window_s2 = sapply(MEASYEAR, map_year_to_s2_window)
-    )
+  # Convert to sf
+  nefin_sf <- st_as_sf(nefin, coords = c(lon_col, lat_col), crs = 4326)
   
-  # Filter valid coords
-  valid_idx <- !is.na(nefin[[lon_col]]) & !is.na(nefin[[lat_col]])
-  nefin <- nefin[valid_idx, ]
-  message("Valid coordinates: ", nrow(nefin))
-  
-  # Initialize result columns
+  # Initialize covariate columns
   nefin$tmean <- NA_real_
   nefin$ppt <- NA_real_
   nefin$ndvi_modis <- NA_real_
   nefin$ndvi_s2 <- NA_real_
   
-  # Pre-load raster paths
-  available <- raster_inv %>% filter(exists)
-  raster_lookup <- list()
-  for (i in 1:nrow(available)) {
-    key <- paste(available$product[i], available$variable[i], available$window[i], sep = "_")
-    raster_lookup[[key]] <- available$path[i]
+  # Extract PRISM - use 2015-2019 as default for NEFIN
+  prism_files <- list.files(prism_dir, pattern = "\\.tif$", full.names = TRUE)
+  
+  tmean_file <- prism_files[grepl("tmean.*2015_2019", prism_files)]
+  if (length(tmean_file) == 1) {
+    r <- terra::rast(tmean_file)
+    pts <- st_transform(nefin_sf, crs(r))
+    vals <- terra::extract(r, terra::vect(pts))
+    nefin$tmean <- vals[[2]]
+    cat("  tmean extracted:", sum(!is.na(nefin$tmean)), "valid\n")
   }
   
-  # Extract by window (MODIS/PRISM)
-  for (window in unique(na.omit(nefin$window_modis))) {
-    message("  Processing window: ", window)
-    idx <- which(nefin$window_modis == window & !is.na(nefin$window_modis))
-    if (length(idx) == 0) next
-    
-    lon <- nefin[[lon_col]][idx]
-    lat <- nefin[[lat_col]][idx]
-    
-    # PRISM tmean
-    key <- paste("prism", "tmean", window, sep = "_")
-    if (!is.null(raster_lookup[[key]])) {
-      nefin$tmean[idx] <- extract_single_raster(lon, lat, raster_lookup[[key]])
-    }
-    
-    # PRISM ppt
-    key <- paste("prism", "ppt", window, sep = "_")
-    if (!is.null(raster_lookup[[key]])) {
-      nefin$ppt[idx] <- extract_single_raster(lon, lat, raster_lookup[[key]])
-    }
-    
-    # MODIS NDVI
-    key <- paste("modis", "ndvi", window, sep = "_")
-    if (!is.null(raster_lookup[[key]])) {
-      nefin$ndvi_modis[idx] <- extract_single_raster(lon, lat, raster_lookup[[key]])
-    }
+  ppt_file <- prism_files[grepl("ppt.*2015_2019", prism_files)]
+  if (length(ppt_file) == 1) {
+    r <- terra::rast(ppt_file)
+    pts <- st_transform(nefin_sf, crs(r))
+    vals <- terra::extract(r, terra::vect(pts))
+    nefin$ppt <- vals[[2]]
+    cat("  ppt extracted:", sum(!is.na(nefin$ppt)), "valid\n")
   }
   
-  # S2 extraction
-  for (window in unique(na.omit(nefin$window_s2))) {
-    message("  Processing S2 window: ", window)
-    idx <- which(nefin$window_s2 == window & !is.na(nefin$window_s2))
-    if (length(idx) == 0) next
-    
-    lon <- nefin[[lon_col]][idx]
-    lat <- nefin[[lat_col]][idx]
-    
-    key <- paste("s2", "ndvi", window, sep = "_")
-    if (!is.null(raster_lookup[[key]])) {
-      nefin$ndvi_s2[idx] <- extract_single_raster(lon, lat, raster_lookup[[key]])
-    }
+  # Extract MODIS NDVI
+  modis_dir <- fs::path(ndvi_dir, "modis")
+  modis_file <- list.files(modis_dir, pattern = "2015_2019.*\\.tif$", full.names = TRUE)
+  if (length(modis_file) == 1) {
+    r <- terra::rast(modis_file)
+    pts <- st_transform(nefin_sf, crs(r))
+    vals <- terra::extract(r, terra::vect(pts))
+    nefin$ndvi_modis <- vals[[2]]
+    cat("  ndvi_modis extracted:", sum(!is.na(nefin$ndvi_modis)), "valid\n")
   }
   
-  message("\nNEFIN extraction complete:")
-  message("  With NDVI (MODIS): ", sum(!is.na(nefin$ndvi_modis)))
-  message("  With climate: ", sum(!is.na(nefin$tmean)))
+  # Save
+  climate_file <- fs::path(output_dir, "climate_at_plots", "nefin_climate.csv")
+  ndvi_file <- fs::path(output_dir, "ndvi_at_plots", "nefin_ndvi.csv")
   
-  # Build output - keep relevant columns
-  base_cols <- c("CN", "STATECD", "MEASYEAR", lon_col, lat_col, 
-                 "aglb_Mg_per_ha", "source", "window_modis")
-  base_cols <- intersect(base_cols, names(nefin))
+  readr::write_csv(nefin %>% select(any_of(c("PLOT_ID", "LON", "LAT", "tmean", "ppt"))), climate_file)
+  readr::write_csv(nefin %>% select(any_of(c("PLOT_ID", "LON", "LAT", "ndvi_modis", "ndvi_s2"))), ndvi_file)
   
-  hex_cols <- names(nefin)[grepl("^hex_id_", names(nefin))]
-  base_cols <- c(base_cols, hex_cols)
+  cat("  ✓ Wrote:", climate_file, "\n")
+  cat("  ✓ Wrote:", ndvi_file, "\n")
   
-  climate_df <- nefin %>% select(all_of(base_cols), tmean, ppt)
-  ndvi_df <- nefin %>% select(all_of(base_cols), ndvi_modis, ndvi_s2)
-  
-  list(climate = climate_df, ndvi = ndvi_df)
+  invisible(nefin)
 }
 
-# ==============================================================================
-# Main
-# ==============================================================================
+# =============================================================================
+# CLI
+# =============================================================================
 
-main <- function() {
-  
-  cat("\n")
-  cat(strrep("=", 60), "\n")
-  cat("  COVARIATE EXTRACTION: PRISM + NDVI to Plots\n")
-  cat("  (Using terra for robust CRS handling)\n")
-  cat(strrep("=", 60), "\n\n")
-  
-  # Parse args
+if (identical(environment(), globalenv()) && !length(sys.calls())) {
   args <- commandArgs(trailingOnly = TRUE)
-  overwrite <- "--overwrite" %in% args
   
-  max_reps <- NULL
-  max_arg <- args[grepl("^--max-reps=", args)]
-  if (length(max_arg) > 0) {
-    max_reps <- as.integer(gsub("^--max-reps=", "", max_arg[1]))
-  }
-  
-  # Create output dirs
-  fs::dir_create(PATHS$ndvi_out_dir, recurse = TRUE)
-  fs::dir_create(PATHS$climate_out_dir, recurse = TRUE)
-  
-  # Discover rasters
-  message("Discovering rasters...")
-  raster_inv <- discover_rasters()
-  
-  n_exist <- sum(raster_inv$exists)
-  message("Found ", n_exist, "/", nrow(raster_inv), " rasters\n")
-  
-  # Show what's available
-  message("Available rasters:")
-  available <- raster_inv %>% filter(exists)
-  for (i in 1:nrow(available)) {
-    message("  [", available$window[i], "] ", 
-            available$product[i], "/", available$variable[i], 
-            ": ", basename(available$path[i]))
-  }
-  
-  if (n_exist == 0) {
-    stop("No rasters found! Check paths.")
-  }
-  
-  # Check a raster's CRS
-  test_raster <- available$path[1]
-  r <- terra::rast(test_raster)
-  message("\nRaster CRS: ", terra::crs(r, describe = TRUE)$name)
+  use_jittered <- "--jittered" %in% args
+  include_nefin <- "--nefin" %in% args || "--all" %in% args
   
   # Extract FIA
-  fia <- extract_fia(raster_inv, max_reps)
-  
-  if (!is.null(fia$climate) && nrow(fia$climate) > 0) {
-    path <- fs::path(PATHS$climate_out_dir, "fia_climate.csv")
-    write_csv(fia$climate, path)
-    message("\nSaved: ", path, " (", nrow(fia$climate), " rows)")
-  }
-  
-  if (!is.null(fia$ndvi) && nrow(fia$ndvi) > 0) {
-    path <- fs::path(PATHS$ndvi_out_dir, "fia_ndvi.csv")
-    write_csv(fia$ndvi, path)
-    message("Saved: ", path, " (", nrow(fia$ndvi), " rows)")
-  }
+  extract_covariates_to_plots(use_jittered = use_jittered)
   
   # Extract NEFIN
-  nefin <- extract_nefin(raster_inv)
-  
-  if (!is.null(nefin$climate) && nrow(nefin$climate) > 0) {
-    path <- fs::path(PATHS$climate_out_dir, "nefin_climate.csv")
-    write_csv(nefin$climate, path)
-    message("\nSaved: ", path, " (", nrow(nefin$climate), " rows)")
+  if (include_nefin) {
+    extract_covariates_to_nefin()
   }
-  
-  if (!is.null(nefin$ndvi) && nrow(nefin$ndvi) > 0) {
-    path <- fs::path(PATHS$ndvi_out_dir, "nefin_ndvi.csv")
-    write_csv(nefin$ndvi, path)
-    message("Saved: ", path, " (", nrow(nefin$ndvi), " rows)")
-  }
-  
-  # Manifest
-  manifest <- list(
-    timestamp = format(Sys.time(), "%Y-%m-%d %H:%M:%S"),
-    rasters_found = n_exist,
-    rasters_expected = nrow(raster_inv),
-    fia_replicates_processed = if (!is.null(max_reps)) max_reps else length(list.files(PATHS$jitter_dir, pattern = "\\.csv$")),
-    fia_records = if (!is.null(fia$ndvi)) nrow(fia$ndvi) else 0,
-    nefin_records = if (!is.null(nefin$ndvi)) nrow(nefin$ndvi) else 0,
-    outputs = list(
-      fia_climate = as.character(fs::path(PATHS$climate_out_dir, "fia_climate.csv")),
-      fia_ndvi = as.character(fs::path(PATHS$ndvi_out_dir, "fia_ndvi.csv")),
-      nefin_climate = as.character(fs::path(PATHS$climate_out_dir, "nefin_climate.csv")),
-      nefin_ndvi = as.character(fs::path(PATHS$ndvi_out_dir, "nefin_ndvi.csv"))
-    )
-  )
-  
-  write_yaml(manifest, "data/processed/extraction_manifest.yml")
-  message("\nManifest saved: data/processed/extraction_manifest.yml")
-  
-  cat("\n", strrep("=", 60), "\n")
-  cat("  EXTRACTION COMPLETE\n")
-  cat(strrep("=", 60), "\n\n")
-}
-
-if (!interactive()) {
-  main()
 }

@@ -1,180 +1,92 @@
 # configs/process.yml
-# Main processing configuration with multi-scale support
+# Main configuration for FIA-NEFIN comparison pipeline
+# Updated: Multi-period support and jitter configuration
 
-project_dir: "."
+# =============================================================================
+# TEMPORAL CONFIGURATION
+# =============================================================================
 
-# Multiple hex grids for multi-scale analysis
-# Scales from 100 ha to 100,000 ha (larger than FIA's 46,000 ha)
-hex_grids:
-  - name: "fia"
-    path: "data/hex/hex_grid.geojson"
-    layer: null
+# Define multiple analysis periods
+# Each period will be processed separately and results compared
+analysis_periods:
+  - name: "2020-2024"
+    years: [2020, 2021, 2022, 2023, 2024]
+    label: "recent"
+  - name: "2015-2019"
+    years: [2015, 2016, 2017, 2018, 2019]
+    label: "historical"
 
-  - name: "100ha"
-    path: "data/hex/hex_grid_100ha.geojson"
-    layer: null
-
-  - name: "500ha"
-    path: "data/hex/hex_grid_500ha.geojson"
-    layer: null
-
-  - name: "1kha"
-    path: "data/hex/hex_grid_1kha.geojson"
-    layer: null
-
-  - name: "5kha"
-    path: "data/hex/hex_grid_5kha.geojson"
-    layer: null
-
-  - name: "10kha"
-    path: "data/hex/hex_grid_10kha.geojson"
-    layer: null
-
-  - name: "50kha"
-    path: "data/hex/hex_grid_50kha.geojson"
-    layer: null
-
-  - name: "100kha"
-    path: "data/hex/hex_grid_100kha.geojson"
-    layer: null
-
-# Settings for creating hex grids (used by --create-hex)
-hex_creation_settings:
-  area_ha_list: [100, 500, 1000, 5000, 10000, 50000, 100000]
-  clip_to: "data/hex/hex_grid.geojson"  # Use FIA grid as boundary
-  exclude_water: "data/hex/Waterbodies_FeaturesToJSON.geojson"
-  buffer_km: 0  # No buffer when clipping to existing grid
-
-# Default grid for initial plot assignment
-hex_path: "data/hex/hex_grid.geojson"
-hex_layer: null
-
-# Choose metric: aglb, carbon, mortality, growth, regeneration
-metric: "aglb"
-
-# Metric-specific parameters
-metric_params:
-  carbon_fraction: 0.5
-  dbh_sapling: 2.5
-  dbh_tree: 5.0
-
-# Updated processing years (annual FIA stable period)
+# Default period (for backwards compatibility with single-period runs)
+# This is used when running without --multi-period flag
 years: [2020, 2021, 2022, 2023, 2024]
+
+# Window size for temporal aggregation (years)
 level_window: 5
 
-# Monte Carlo settings
-mc_reps: 61             # Number of jitter replicates
-jitter_radius_m: 1609.34  # ~1 mile
+# =============================================================================
+# MONTE CARLO JITTER CONFIGURATION
+# =============================================================================
 
-# Jitter constraints
-mask:
-  use_hex_union: true
-  use_state_constraint: true
-  state_geo_path: "data/boundaries/states_5070.geojson"
-  state_field: "STATEFP"
-  max_reroll: 10
+# Number of jitter replicates for positional uncertainty estimation
+# Recommended: 61-100 for stable estimates, 200+ for publication-quality
+# WARNING: Increasing this significantly increases processing time
+mc_reps: 100
 
-# Run ID (auto-generated if null)
-run_id: null
+# Jitter radius in meters (FIA uses ~1 mile = 1609.34m)
+jitter_radius_m: 1609.34
 
+# =============================================================================
+# HEX GRID CONFIGURATION
+# =============================================================================
 
-# -----------------------------------------------------------------------------
-# PRISM Climate Data
-# -----------------------------------------------------------------------------
-prism:
-  data_dir: "data/processed/prism"
-  # Actual file patterns in your project
-  tmean_pattern: "prism_tmean_ne_{start}_{end}.tif"
-  ppt_pattern: "prism_ppt_ne_{start}_{end}.tif"
-  variables:
-    - tmean
-    - ppt
-  extraction_method: "point"
+# Metric to compute (aglb = aboveground live biomass)
+metric: aglb
 
-# -----------------------------------------------------------------------------
-# NDVI Data
-# -----------------------------------------------------------------------------
-ndvi:
-  use_modis: true
-  use_s2: true
-  
-  # MODIS (250m)
-  modis_dir: "data/processed/ndvi/modis"
-  modis_pattern: "MODIS_NDVI_5yr_blocked_{start}_{end}.tif"
-  modis_extraction_method: "point"
-  
- # Sentinel-2 (10m)
-  s2_dir: "data/processed/ndvi/s2"
-  s2_pattern: "ndvi_{start}_{end}_raw.tif"
-  s2_extraction_method: "point"
+# Hex grids to process (name must match file suffix)
+# Order: smallest to largest for logical progression
+hex_grids:
+  - name: 100ha
+    path: data/hex/hex_grid_100ha.geojson
+  - name: 500ha
+    path: data/hex/hex_grid_500ha.geojson
+  - name: 1kha
+    path: data/hex/hex_grid_1kha.geojson
+  - name: 5kha
+    path: data/hex/hex_grid_5kha.geojson
+  - name: 10kha
+    path: data/hex/hex_grid_10kha.geojson
+  - name: 50kha
+    path: data/hex/hex_grid_50kha.geojson
+  - name: 64kha
+    path: data/hex/hex_grid.geojson
+  - name: 100kha
+    path: data/hex/hex_grid_100kha.geojson
 
-# -----------------------------------------------------------------------------
-# Temporal Windows (5-year non-overlapping blocks)
-# Maps MEASYEAR to the appropriate raster window
-# -----------------------------------------------------------------------------
-temporal_windows:
-  "2000_2004":
-    start: 2000
-    end: 2004
-    has_modis: true
-    has_s2: false
-    has_prism: true
-  "2005_2009":
-    start: 2005
-    end: 2009
-    has_modis: true
-    has_s2: false
-    has_prism: true
-  "2010_2014":
-    start: 2010
-    end: 2014
-    has_modis: true
-    has_s2: false
-    has_prism: true
-  "2015_2019":
-    start: 2015
-    end: 2019
-    has_modis: true
-    has_s2: false  # You have 2016_2019, will handle below
-    has_prism: true
-  "2016_2019":
-    start: 2016
-    end: 2019
-    has_modis: false
-    has_s2: true
-    has_prism: false
-  "2020_2024":
-    start: 2020
-    end: 2024
-    has_modis: true
-    has_s2: true
-    has_prism: true
+# =============================================================================
+# PROCESSING OPTIONS
+# =============================================================================
 
-# -----------------------------------------------------------------------------
-# Output Directories
-# -----------------------------------------------------------------------------
-extraction_outputs:
-  ndvi_dir: "data/processed/ndvi_at_plots"
-  climate_dir: "data/processed/climate_at_plots"
+# Project directory (usually current directory)
+project_dir: "."
 
-# -----------------------------------------------------------------------------
-# Modeling Configuration
-# -----------------------------------------------------------------------------
-modeling:
-  cv_method: "spatial_hex"
-  cv_folds: 5
-  cv_hex_scale: "1kha"
-  
-  models:
-    - "lm"
-    - "gam"
-    - "rf"
-  
-  response: "aglb_Mg_per_ha"
-  
-  # Datasets to compare
-  datasets:
-    - "fia_fuzzed"
-    - "fia_mean"
-    - "nefin_true"
-    - "combined"
+# Whether to include NEFIN comparison
+include_nefin: true
+
+# Minimum plots required for reliable hex estimates
+min_plots_per_hex: 1
+
+# Target plots for "good" FIA coverage (used in weighting)
+target_plots_per_hex: 3
+
+# =============================================================================
+# OUTPUT CONFIGURATION
+# =============================================================================
+
+# Base directory for run outputs
+runs_dir: "runs"
+
+# Consolidate results across scales
+consolidate_results: true
+
+# Generate visualizations automatically
+auto_visualize: true
