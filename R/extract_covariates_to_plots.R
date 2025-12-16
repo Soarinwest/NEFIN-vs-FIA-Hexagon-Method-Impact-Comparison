@@ -59,6 +59,10 @@ extract_covariates_to_plots <- function(
     if ("lat" %in% names(plots)) lat_col <- "lat"
     if ("longitude" %in% names(plots)) lon_col <- "longitude"
     if ("latitude" %in% names(plots)) lat_col <- "latitude"
+    if ("lon_original" %in% names(plots)) lon_col <- "lon_original"
+    if ("lat_original" %in% names(plots)) lat_col <- "lat_original"
+    if ("LONGITUDE" %in% names(plots)) lon_col <- "LONGITUDE"
+    if ("LATITUDE" %in% names(plots)) lat_col <- "LATITUDE"
   }
   
   if (!lon_col %in% names(plots) || !lat_col %in% names(plots)) {
@@ -401,63 +405,113 @@ extract_covariates_to_nefin <- function(
   
   nefin <- readr::read_csv(nefin_path, show_col_types = FALSE)
   cat("  Loaded", nrow(nefin), "NEFIN plots\n")
+  cat("  Columns:", paste(names(nefin), collapse = ", "), "\n")
   
-  # Find coordinate columns
-  lon_col <- if ("LON" %in% names(nefin)) "LON" else if ("lon" %in% names(nefin)) "lon" else "longitude"
-  lat_col <- if ("LAT" %in% names(nefin)) "LAT" else if ("lat" %in% names(nefin)) "lat" else "latitude"
+ # Find coordinate columns - try multiple possibilities
+  lon_col <- NULL
+  lat_col <- NULL
+  
+  lon_candidates <- c("LON", "lon", "longitude", "LONGITUDE", "lon_original", "lon_public", "x", "X")
+  lat_candidates <- c("LAT", "lat", "latitude", "LATITUDE", "lat_original", "lat_public", "y", "Y")
+  
+  for (c in lon_candidates) {
+    if (c %in% names(nefin)) { lon_col <- c; break }
+  }
+  for (c in lat_candidates) {
+    if (c %in% names(nefin)) { lat_col <- c; break }
+  }
+  
+  if (is.null(lon_col) || is.null(lat_col)) {
+    cat("  ⚠ Cannot find coordinate columns in NEFIN data\n")
+    cat("    Available columns:", paste(names(nefin), collapse = ", "), "\n")
+    return(invisible(NULL))
+  }
+  
+  cat("  Using coordinates:", lon_col, "/", lat_col, "\n")
+  
+  # Filter valid coordinates
+  nefin_valid <- nefin %>%
+    filter(!is.na(.data[[lon_col]]), !is.na(.data[[lat_col]]))
+  
+  cat("  Valid coordinates:", nrow(nefin_valid), "of", nrow(nefin), "\n")
   
   # Convert to sf
-  nefin_sf <- st_as_sf(nefin, coords = c(lon_col, lat_col), crs = 4326)
+  nefin_sf <- st_as_sf(nefin_valid, coords = c(lon_col, lat_col), crs = 4326)
   
   # Initialize covariate columns
-  nefin$tmean <- NA_real_
-  nefin$ppt <- NA_real_
-  nefin$ndvi_modis <- NA_real_
-  nefin$ndvi_s2 <- NA_real_
+  nefin_valid$tmean <- NA_real_
+  nefin_valid$ppt <- NA_real_
+  nefin_valid$ndvi_modis <- NA_real_
+  nefin_valid$ndvi_s2 <- NA_real_
   
   # Extract PRISM - use 2015-2019 as default for NEFIN
   prism_files <- list.files(prism_dir, pattern = "\\.tif$", full.names = TRUE)
   
   tmean_file <- prism_files[grepl("tmean.*2015_2019", prism_files)]
   if (length(tmean_file) == 1) {
+    cat("  Extracting tmean from:", basename(tmean_file), "\n")
     r <- terra::rast(tmean_file)
     pts <- st_transform(nefin_sf, crs(r))
     vals <- terra::extract(r, terra::vect(pts))
-    nefin$tmean <- vals[[2]]
-    cat("  tmean extracted:", sum(!is.na(nefin$tmean)), "valid\n")
+    nefin_valid$tmean <- vals[[2]]
+    cat("    tmean extracted:", sum(!is.na(nefin_valid$tmean)), "valid\n")
   }
   
   ppt_file <- prism_files[grepl("ppt.*2015_2019", prism_files)]
   if (length(ppt_file) == 1) {
+    cat("  Extracting ppt from:", basename(ppt_file), "\n")
     r <- terra::rast(ppt_file)
     pts <- st_transform(nefin_sf, crs(r))
     vals <- terra::extract(r, terra::vect(pts))
-    nefin$ppt <- vals[[2]]
-    cat("  ppt extracted:", sum(!is.na(nefin$ppt)), "valid\n")
+    nefin_valid$ppt <- vals[[2]]
+    cat("    ppt extracted:", sum(!is.na(nefin_valid$ppt)), "valid\n")
   }
   
   # Extract MODIS NDVI
   modis_dir <- fs::path(ndvi_dir, "modis")
-  modis_file <- list.files(modis_dir, pattern = "2015_2019.*\\.tif$", full.names = TRUE)
+  modis_files <- if (fs::dir_exists(modis_dir)) {
+    list.files(modis_dir, pattern = "\\.tif$", full.names = TRUE)
+  } else {
+    list.files(ndvi_dir, pattern = "MODIS.*\\.tif$", full.names = TRUE)
+  }
+  modis_file <- modis_files[grepl("2015_2019", modis_files)]
   if (length(modis_file) == 1) {
+    cat("  Extracting NDVI from:", basename(modis_file), "\n")
     r <- terra::rast(modis_file)
     pts <- st_transform(nefin_sf, crs(r))
     vals <- terra::extract(r, terra::vect(pts))
-    nefin$ndvi_modis <- vals[[2]]
-    cat("  ndvi_modis extracted:", sum(!is.na(nefin$ndvi_modis)), "valid\n")
+    nefin_valid$ndvi_modis <- vals[[2]]
+    cat("    ndvi_modis extracted:", sum(!is.na(nefin_valid$ndvi_modis)), "valid\n")
   }
   
+  # Find ID column
+  id_col <- if ("PLOT_ID" %in% names(nefin_valid)) "PLOT_ID" 
+            else if ("plot_id" %in% names(nefin_valid)) "plot_id"
+            else if ("CN" %in% names(nefin_valid)) "CN"
+            else names(nefin_valid)[1]
+  
   # Save
+  fs::dir_create(fs::path(output_dir, "climate_at_plots"), recurse = TRUE)
+  fs::dir_create(fs::path(output_dir, "ndvi_at_plots"), recurse = TRUE)
+  
   climate_file <- fs::path(output_dir, "climate_at_plots", "nefin_climate.csv")
   ndvi_file <- fs::path(output_dir, "ndvi_at_plots", "nefin_ndvi.csv")
   
-  readr::write_csv(nefin %>% select(any_of(c("PLOT_ID", "LON", "LAT", "tmean", "ppt"))), climate_file)
-  readr::write_csv(nefin %>% select(any_of(c("PLOT_ID", "LON", "LAT", "ndvi_modis", "ndvi_s2"))), ndvi_file)
+  climate_out <- nefin_valid %>% select(all_of(c(id_col, lon_col, lat_col)), tmean, ppt)
+  ndvi_out <- nefin_valid %>% select(all_of(c(id_col, lon_col, lat_col)), ndvi_modis, ndvi_s2)
+  
+  readr::write_csv(climate_out, climate_file)
+  readr::write_csv(ndvi_out, ndvi_file)
   
   cat("  ✓ Wrote:", climate_file, "\n")
   cat("  ✓ Wrote:", ndvi_file, "\n")
   
-  invisible(nefin)
+  cat("\n  NEFIN Summary:\n")
+  cat("    tmean:      ", sum(!is.na(nefin_valid$tmean)), "valid\n")
+  cat("    ppt:        ", sum(!is.na(nefin_valid$ppt)), "valid\n")
+  cat("    ndvi_modis: ", sum(!is.na(nefin_valid$ndvi_modis)), "valid\n")
+  
+  invisible(nefin_valid)
 }
 
 # =============================================================================
