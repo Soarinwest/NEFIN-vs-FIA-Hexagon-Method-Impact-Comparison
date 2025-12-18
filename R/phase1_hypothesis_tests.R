@@ -47,27 +47,56 @@ cat("  Loaded", nrow(comparison), "hex-scale observations\n")
 cat("  Scales:", paste(unique(comparison$grid_scale), collapse = ", "), "\n\n")
 
 # =============================================================================
-# Compute delta_se from augmented_se and se_fia
+# Compute delta_se from augmented_se and fia_only_se
 # =============================================================================
 cat("Computing delta_se...\n")
 
-# Your data has augmented_se and se_fia (or fia_only_se)
-se_fia_col <- if ("se_fia" %in% names(comparison)) "se_fia" else "fia_only_se"
+# IMPORTANT: Use fia_only_se (FIA-only baseline), NOT se_fia (which may be derived)
+# fia_only_se = SE using only FIA plots
+# augmented_se = SE using FIA + NEFIN combined
+# delta_se = augmented_se - fia_only_se (negative = improvement)
+
+se_baseline_col <- if ("fia_only_se" %in% names(comparison)) "fia_only_se" else "se_fia"
 se_aug_col <- if ("augmented_se" %in% names(comparison)) "augmented_se" else NULL
 
 if (is.null(se_aug_col)) {
   stop("Cannot find augmented_se column")
 }
 
+cat("  Baseline SE column:", se_baseline_col, "\n")
+cat("  Augmented SE column:", se_aug_col, "\n")
+
+# Check if columns are identical (which would indicate a problem)
+if (se_baseline_col %in% names(comparison) && se_aug_col %in% names(comparison)) {
+  test_diff <- comparison[[se_aug_col]] - comparison[[se_baseline_col]]
+  if (all(test_diff == 0, na.rm = TRUE)) {
+    cat("  ⚠ WARNING: Columns are identical! Checking for alternative...\n")
+    # Try fia_only_se explicitly
+    if ("fia_only_se" %in% names(comparison) && se_baseline_col != "fia_only_se") {
+      se_baseline_col <- "fia_only_se"
+      cat("  Switching to fia_only_se\n")
+    }
+  }
+}
+
 comparison <- comparison %>%
   mutate(
-    delta_se = .data[[se_aug_col]] - .data[[se_fia_col]]
+    delta_se = .data[[se_aug_col]] - .data[[se_baseline_col]]
   )
 
-cat("  ✓ delta_se computed from", se_aug_col, "-", se_fia_col, "\n")
+cat("  ✓ delta_se computed from", se_aug_col, "-", se_baseline_col, "\n")
 cat("  delta_se range:", round(min(comparison$delta_se, na.rm = TRUE), 3), "to",
     round(max(comparison$delta_se, na.rm = TRUE), 3), "\n")
-cat("  Non-NA delta_se:", sum(!is.na(comparison$delta_se)), "\n\n")
+cat("  Non-NA delta_se:", sum(!is.na(comparison$delta_se)), "\n")
+
+# Diagnostic: show sample of values
+cat("  Sample values:\n")
+sample_data <- comparison %>%
+  filter(!is.na(delta_se)) %>%
+  select(hex_id, grid_scale, all_of(c(se_baseline_col, se_aug_col)), delta_se) %>%
+  head(5)
+print(sample_data)
+cat("\n")
 
 # =============================================================================
 # Helper Functions
@@ -113,8 +142,8 @@ scale_summary <- comparison %>%
     n_with_both = sum(has_both, na.rm = TRUE),
     
     # SE statistics
-    mean_se_fia = mean(.data[[se_fia_col]], na.rm = TRUE),
-    median_se_fia = median(.data[[se_fia_col]], na.rm = TRUE),
+    mean_se_fia = mean(.data[[se_baseline_col]], na.rm = TRUE),
+    median_se_fia = median(.data[[se_baseline_col]], na.rm = TRUE),
     mean_se_augmented = mean(.data[[se_aug_col]], na.rm = TRUE),
     median_se_augmented = median(.data[[se_aug_col]], na.rm = TRUE),
     
@@ -129,8 +158,8 @@ scale_summary <- comparison %>%
     pct_se_reduced = mean(delta_se < 0, na.rm = TRUE) * 100,
     
     # Relative change
-    mean_pct_delta_se = mean(delta_se / .data[[se_fia_col]] * 100, na.rm = TRUE),
-    median_pct_delta_se = median(delta_se / .data[[se_fia_col]] * 100, na.rm = TRUE),
+    mean_pct_delta_se = mean(delta_se / .data[[se_baseline_col]] * 100, na.rm = TRUE),
+    median_pct_delta_se = median(delta_se / .data[[se_baseline_col]] * 100, na.rm = TRUE),
     
     .groups = "drop"
   ) %>%
@@ -194,9 +223,9 @@ effect_sizes <- comparison %>%
   group_by(grid_scale) %>%
   summarize(
     cohens_d = mean(delta_se, na.rm = TRUE) / sd(delta_se, na.rm = TRUE),
-    relative_effect_pct = mean(delta_se / .data[[se_fia_col]] * 100, na.rm = TRUE),
-    pct_meaningful_reduction = mean(delta_se / .data[[se_fia_col]] < -0.10, na.rm = TRUE) * 100,
-    pct_meaningful_increase = mean(delta_se / .data[[se_fia_col]] > 0.10, na.rm = TRUE) * 100,
+    relative_effect_pct = mean(delta_se / .data[[se_baseline_col]] * 100, na.rm = TRUE),
+    pct_meaningful_reduction = mean(delta_se / .data[[se_baseline_col]] < -0.10, na.rm = TRUE) * 100,
+    pct_meaningful_increase = mean(delta_se / .data[[se_baseline_col]] > 0.10, na.rm = TRUE) * 100,
     .groups = "drop"
   ) %>%
   mutate(effect_interpretation = sapply(cohens_d, interpret_d)) %>%

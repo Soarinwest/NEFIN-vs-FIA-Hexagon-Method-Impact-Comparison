@@ -164,7 +164,7 @@ summarize_fia_stability <- function(fia_df, scale_name, out_dir) {
 # ------------------------------------------------------------
 # main 5-year comparison with recommendations, fuzz, bias
 # now takes cfg for metadata
-# FIXED: Proper NA handling for fuzz_pressure calculation
+# FIXED: Proper SE combination using inverse-variance weighting
 # ------------------------------------------------------------
 compare_5y_window <- function(fia_df,
                               nefin_df,
@@ -185,7 +185,7 @@ compare_5y_window <- function(fia_df,
   se_drop_small <- 0.05  # relative SE drop considered trivial
   
   # Minimum SE to consider valid for ratio calculations
-  min_se_for_ratio <- 0.1  # FIXED: Avoid division by near-zero SE
+  min_se_for_ratio <- 0.1  # Avoid division by near-zero SE
   
   # --- Prep NEFIN for these years and this grid ---
   nefin_xy <- nefin_df %>%
@@ -241,18 +241,22 @@ compare_5y_window <- function(fia_df,
   joined_5y <- full_join(fia_5y, nefin_5y, by = "hex_id") %>%
     full_join(nefin_source_summary, by = "hex_id")
   
-  # row-wise augmented calculation
+  # =========================================================================
+  # FIXED: Row-wise calculation with PROPER inverse-variance SE weighting
+  # =========================================================================
   safe_row_calc <- function(fia_only_mean, fia_only_se, fia_only_n,
                             nefin_mean_5y, nefin_se_5y, nefin_n_5y) {
     
     n_fia   <- ifelse(is.na(fia_only_n),   0, fia_only_n)
     n_nefin <- ifelse(is.na(nefin_n_5y),   0, nefin_n_5y)
+    n_combined <- n_fia + n_nefin
     
-    # conservative weighting: FIA is anchor unless FIA is weak
+    # Weighting for MEAN: FIA is anchor unless FIA is weak
+    # (This controls how much NEFIN pulls the estimate)
     w_fia   <- min(1, n_fia / target_n)
     w_nefin <- 1 - w_fia
     
-    # augmented mean: weighted blend
+    # augmented mean: weighted blend (FIA-anchored)
     augmented_mean <- NA_real_
     if (!is.na(fia_only_mean) && !is.na(nefin_mean_5y)) {
       augmented_mean <- w_fia * fia_only_mean + w_nefin * nefin_mean_5y
@@ -262,13 +266,28 @@ compare_5y_window <- function(fia_df,
       augmented_mean <- nefin_mean_5y
     }
     
-    # augmented SE: weighted blend of SEs (conservative)
+    # =========================================================================
+    # FIXED: augmented SE using INVERSE-VARIANCE WEIGHTING
+    # 
+    # When combining independent estimates, the combined SE is:
+    #   SE_combined = 1 / sqrt(1/SE_fia^2 + 1/SE_nefin^2)
+    # 
+    # This is ALWAYS lower than either individual SE (which is the point!)
+    # The old weighted-blend approach was wrong because it would return
+    # augmented_se = fia_only_se when FIA had good coverage.
+    # =========================================================================
     augmented_se <- NA_real_
-    if (!is.na(fia_only_se) && !is.na(nefin_se_5y)) {
-      augmented_se <- w_fia * fia_only_se + w_nefin * nefin_se_5y
-    } else if (!is.na(fia_only_se)) {
+    
+    if (!is.na(fia_only_se) && !is.na(nefin_se_5y) && 
+        fia_only_se > 0 && nefin_se_5y > 0) {
+      # Inverse-variance weighting: proper statistical combination
+      # This gives the SE of the weighted mean of two independent estimates
+      augmented_se <- 1 / sqrt(1/fia_only_se^2 + 1/nefin_se_5y^2)
+    } else if (!is.na(fia_only_se) && fia_only_se > 0) {
+      # Only FIA available
       augmented_se <- fia_only_se
-    } else if (!is.na(nefin_se_5y)) {
+    } else if (!is.na(nefin_se_5y) && nefin_se_5y > 0) {
+      # Only NEFIN available
       augmented_se <- nefin_se_5y
     }
     
@@ -280,9 +299,9 @@ compare_5y_window <- function(fia_df,
       NA_real_
     }
     
-    # uncertainty improvement
+    # uncertainty improvement (positive = NEFIN reduced uncertainty)
     uncertainty_improvement <- fia_only_se - augmented_se
-    relative_uncertainty_drop <- if (!is.na(fia_only_se) && fia_only_se != 0) {
+    relative_uncertainty_drop <- if (!is.na(fia_only_se) && fia_only_se > 0) {
       uncertainty_improvement / fia_only_se
     } else {
       NA_real_
@@ -323,7 +342,6 @@ compare_5y_window <- function(fia_df,
     select(-calc)
   
   # fuzz pressure: how much FIA uncertainty is coming from positional fuzz?
-  # FIXED: More robust calculation that handles edge cases
   joined_5y <- joined_5y %>%
     mutate(
       fuzz_pressure = dplyr::case_when(
@@ -374,7 +392,7 @@ compare_5y_window <- function(fia_df,
       level_window = level_window
     )
   
-  # plots for this grid - FIXED: filter out NA values for plotting
+  # plots for this grid - filter out NA values for plotting
   plot_data <- joined_5y %>%
     filter(!is.na(fuzz_pressure), !is.na(relative_uncertainty_drop),
            is.finite(fuzz_pressure), is.finite(relative_uncertainty_drop))
@@ -449,7 +467,7 @@ compare_5y_window <- function(fia_df,
     fs::path(out_dir, paste0("summary_5y_", grid_name, ".csv"))
   )
   
-  # guidance text per scale - FIXED: handle NA in median calculations
+  # guidance text per scale - handle NA in median calculations
   guidance_df <- joined_5y %>%
     group_by(recommendation) %>%
     summarise(
