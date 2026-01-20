@@ -1,414 +1,193 @@
-# NEFIN-vs-FIA-Hexagon-Method-Impact-Comparison
+# FIA-NEFIN Hexagon Analysis Pipeline (Consolidated)
+
+## Overview
+
+This is the reorganized pipeline for comparing FIA (fuzzed coordinates) vs NEFIN (true coordinates) forest inventory data aggregated to hexagonal spatial units across multiple scales.
+
+**Active Scripts:** 24 (down from 47)  
+**Archived Scripts:** 22 (Phase 2, legacy, one-time fixes)
+
+---
+
+## Directory Structure
+
+```
+R/
+├── run_pipeline.R              # Master pipeline controller
+├── validate_dashboard_data.R   # Data validation checks
+│
+├── 00_utils/                   # Shared utility functions
+│   ├── utils_spatial.R         # Coordinate transforms, hex assignment
+│   ├── utils_metrics.R         # SE calculation, weighted means  
+│   └── utils_scale_names.R     # Scale name standardization (fia→64kha)
+│
+├── 01_data_prep/               # Data acquisition & preparation
+│   ├── 01_init_project.R       # Create directories
+│   ├── 02_create_hex_grid.R    # Generate hex grids at multiple scales
+│   ├── 03_filter_hex_grid.R    # Clip grids to study area
+│   ├── 04_fia_pull.R           # Download FIA data from FIADB
+│   ├── 05_process_nefin.R      # Standardize NEFIN to FIA format
+│   ├── 06_assign_plots.R       # Assign FIA plots to hexes
+│   ├── 07_assign_nefin.R       # Assign NEFIN plots to hexes
+│   └── 08_extract_covariates.R # Extract PRISM climate + NDVI
+│
+├── 02_uncertainty/             # Monte Carlo positional uncertainty
+│   ├── 01_build_jitter_library.R  # Generate N jittered coordinate sets
+│   └── 02_compute_metrics.R       # Compute hex metrics with MC integration
+│
+├── 03_comparison/              # FIA vs FIA+NEFIN comparison
+│   ├── 01_compare_fia_nefin.R  # Per-hex comparison (FIXED augmented_se bug)
+│   ├── 02_consolidate_results.R # Merge all scale results
+│   └── 03_process_all_scales.R  # Multi-scale processing loop
+│
+├── 04_analysis/                # Statistical analysis
+│   ├── 01_error_analysis.R     # Error decomposition (sampling vs positional)
+│   ├── 02_advanced_analysis.R  # Summary statistics
+│   ├── 03_phase1_hypothesis_tests.R  # Wilcoxon tests, CIs, effect sizes
+│   └── 04_nefin_dominance_analysis.R # Bias risk from NEFIN dominance
+│
+├── 05_visualization/           # Publication figures
+│   ├── 01_nefin_impact_figures.R   # NEFIN impact publication figures
+│   ├── 02_visualize_results.R      # Consolidated results dashboard
+│   └── 03_spatial_visualizations.R # Maps with hex grids
+│
+└── _archive/                   # Archived scripts (not part of core pipeline)
+    ├── phase2/                 # Spatial modeling scripts (future work)
+    ├── legacy/                 # Superseded scripts
+    └── one_time_fixes/         # One-time data fixes
+```
+
+---
+
+## Quick Start
+
+### Full Pipeline
+```bash
+cd NEFIN-vs-FIA-Hexagon-Method-Impact-Comparison
+Rscript run_pipeline.R --all
+```
+
+### Run Specific Stages
+```bash
+# Data preparation only
+Rscript run_pipeline.R --data
+
+# Just rerun comparison after fixing something
+Rscript run_pipeline.R --compare --analyze --visualize
+
+# Generate figures only
+Rscript run_pipeline.R --visualize
+```
+
+### Validate Data
+```bash
+Rscript run_pipeline.R --validate
+```
+
+---
+
+## Pipeline Stages
+
+### Stage 1: Data Preparation (`01_data_prep/`)
+- **Time:** ~30-60 min (FIA download is slowest)
+- **Outputs:** `data/processed/`, hex grid GeoJSONs
+
+### Stage 2: Monte Carlo Uncertainty (`02_uncertainty/`)
+- **Time:** ~2-4 hours (100 MC replicates × 8 scales)
+- **Outputs:** `data/processed/mc_jitter_library/`
+
+### Stage 3: Comparison (`03_comparison/`)
+- **Time:** ~10-15 min
+- **Outputs:** `runs/consolidated_*/fia_nefin_comparison_all_scales.csv`
 
-FIA-NEFIN Multi-Stage Processing Pipeline
+### Stage 4: Analysis (`04_analysis/`)
+- **Time:** ~5 min
+- **Outputs:** `runs/consolidated_*/advanced_analysis/`, `phase1_statistics/`, `dominance_analysis/`
 
-Efficient, cacheable pipeline for computing forest metrics from FIA data with Monte Carlo positional uncertainty.
+### Stage 5: Visualization (`05_visualization/`)
+- **Time:** ~5 min
+- **Outputs:** `runs/consolidated_*/nefin_impact_figures/`, `visualizations/`
 
-Architecture
+---
 
-The pipeline is split into 5 discrete stages, allowing you to:
+## Key Bug Fixes in This Version
 
+### `compare_fia_nefin.R` - Fixed augmented_se calculation
 
+**Old (buggy):**
+```r
+# When FIA had ≥3 plots, NEFIN was ignored:
+w_fia = min(1, n_fia / 3)  # = 1 if n_fia >= 3
+augmented_se = w_fia * fia_se + (1-w_fia) * nefin_se  # = fia_se when w_fia=1
+```
 
-Run expensive operations (jittering) once and cache results
+**New (correct):**
+```r
+# Proper inverse-variance weighting:
+augmented_se = 1 / sqrt(1/fia_se^2 + 1/nefin_se^2)  # Always < either SE
+```
 
-Compute multiple metrics quickly using the same jitter library
+---
 
-Resume from any stage without re-running previous work
+## Configuration
 
+Edit `process.yml` to configure:
+- Study area bounds
+- Hex grid scales (default: 100ha to 100kha)
+- MC replicates (default: 100)
+- FIA states to include
+- Output directories
 
+---
 
-Pipeline Stages
+## Archived Scripts
 
-┌─────────────────────────────────────────────────────────────┐
+Scripts in `_archive/` are not needed for the core Phase 1 analysis:
 
-│ STAGE 1: Hex Grid Filtering                                │
+### `_archive/phase2/` - Spatial Modeling (Future Work)
+- `fia_nefin_spatial_modeling.R` - RF/GAM biomass models
+- `fuzzing_effect_analysis.R` - Fuzzing impact visualization
+- `sensor_resolution_comparison.R` - MODIS vs Sentinel-2
+- `create_prediction_maps.R` - Hex-level prediction maps
 
-│ Filter national hex grid to your study area                │
+### `_archive/legacy/` - Superseded
+- `master_process_all.R` - Old pipeline controller
+- `03_fia_pull_states.R` - State-by-state FIA pull (merged into 04_fia_pull.R)
+- `process_multi_period.R` - Temporal analysis
 
-│ Output: data/hex/hex\_grid.geojson                          │
+### `_archive/one_time_fixes/`
+- `batch_rename_fia_to_64kha.R` - One-time scale rename
+- `fix_fia_to_64kha_columns.R` - One-time column fix
 
-│ Run: Once per study area                                   │
+---
 
-└─────────────────────────────────────────────────────────────┘
+## Dependencies
 
-&nbsp;                           ↓
+```r
+# Core
+library(dplyr)
+library(tidyr)
+library(readr)
+library(sf)
+library(ggplot2)
 
-┌─────────────────────────────────────────────────────────────┐
+# FIA
+library(DBI)
+library(RSQLite)
 
-│ STAGE 2: FIA Data Pull                                     │
+# Spatial
+library(terra)
+library(h3)
 
-│ Download and filter FIA database                           │
+# Optional (for some visualizations)
+library(patchwork)
+library(viridis)
+library(scales)
+```
 
-│ Output: data/interim/fia\_region/ OR data/interim/fia/     │
+---
 
-│ Run: Once per data update                                  │
+## Contact
 
-└─────────────────────────────────────────────────────────────┘
-
-&nbsp;                           ↓
-
-┌─────────────────────────────────────────────────────────────┐
-
-│ STAGE 3: Plot-to-Hex Assignment (NEW)                     │
-
-│ Assign FIA plots to hexes, preserve original coordinates  │
-
-│ Output: data/processed/plot\_hex\_assignments.csv           │
-
-│ Run: Once per hex grid + FIA data combination             │
-
-└─────────────────────────────────────────────────────────────┘
-
-&nbsp;                           ↓
-
-┌─────────────────────────────────────────────────────────────┐
-
-│ STAGE 4: Monte Carlo Jitter Library (NEW)                 │
-
-│ Pre-generate N jittered coordinate sets for all plots     │
-
-│ Output: data/processed/mc\_jitter\_library/                 │
-
-│ Run: Once (or when changing jitter parameters)            │
-
-│ ⏱️  EXPENSIVE: ~10-30 min for 100 reps                     │
-
-└─────────────────────────────────────────────────────────────┘
-
-&nbsp;                           ↓
-
-┌─────────────────────────────────────────────────────────────┐
-
-│ STAGE 5: Metric Computation (NEW)                         │
-
-│ Compute metrics using cached jitter library               │
-
-│ Output: runs/{run\_id}/hex\_{metric}\_results.csv           │
-
-│ Run: As many times as you want, for any metric            │
-
-│ ⚡ FAST: ~30 sec - 2 min (no re-jittering!)               │
-
-└─────────────────────────────────────────────────────────────┘
-
-Quick Start
-
-First-Time Setup
-
-Run the full pipeline once:
-
-bash# Install all stages and build cache
-
-Rscript run\_pipeline.R --all
-
-This will:
-
-
-
-Initialize project structure
-
-Filter hex grid to your states
-
-Pull FIA data
-
-Assign plots to hexes
-
-Build jitter library (100 replicates, ~15-20 min)
-
-Compute initial metric (AGLB)
-
-
-
-Compute Additional Metrics (Fast!)
-
-After setup, computing new metrics is fast because it reuses the jitter library:
-
-bash# Edit configs/process.yml, change:
-
-\# metric: "carbon"
-
-
-
-\# Then run (takes ~1 min):
-
-Rscript run\_pipeline.R --compute
-
-You can compute as many metrics as you want without re-jittering!
-
-Available Metrics
-
-
-
-aglb - Aboveground live biomass (Mg/ha)
-
-carbon - Carbon stock (Mg C/ha)
-
-mortality - Annual mortality rate (% or Mg/ha/yr)
-
-growth - Annual growth increment (Mg/ha/yr) requires previous visit data
-
-regeneration - Sapling→tree transition ratio
-
-
-
-Configuration
-
-configs/process.yml
-
-yamlproject\_dir: "."
-
-hex\_path: "data/hex/hex\_grid.geojson"
-
-
-
-\# Choose metric: aglb, carbon, mortality, growth, regeneration
-
-metric: "aglb"
-
-
-
-\# Metric-specific parameters
-
-metric\_params:
-
-&nbsp; carbon\_fraction: 0.5
-
-&nbsp; dbh\_sapling: 2.5
-
-&nbsp; dbh\_tree: 5.0
-
-
-
-\# Processing years
-
-years: \[2018, 2019, 2020]
-
-level\_window: 3
-
-
-
-\# Monte Carlo settings (used in Stage 4)
-
-mc\_reps: 100              # More reps = better precision, longer Stage 4
-
-jitter\_radius\_m: 1609.34  # ~1 mile
-
-
-
-\# Jitter constraints
-
-mask:
-
-&nbsp; use\_hex\_union: true
-
-&nbsp; use\_state\_constraint: true
-
-&nbsp; state\_geo\_path: "data/boundaries/states\_5070.geojson"
-
-&nbsp; state\_field: "STATEFP"
-
-&nbsp; max\_reroll: 10
-
-Running Individual Stages
-
-Stage 3: Re-assign Plots (if hex grid changes)
-
-bashRscript run\_pipeline.R --assign --overwrite
-
-Stage 4: Rebuild Jitter Library (if parameters change)
-
-bash# After editing mc\_reps, jitter\_radius\_m, or mask settings:
-
-Rscript run\_pipeline.R --jitter --overwrite
-
-Stage 5: Compute Metrics Only (default)
-
-bash# Just run the computation (fastest):
-
-Rscript run\_pipeline.R --compute
-
-
-
-\# Or equivalently:
-
-Rscript run\_pipeline.R
-
-File Structure
-
-project/
-
-├── R/
-
-│   ├── stage2\_assign\_plots.R       # Stage 3: Plot→Hex assignment
-
-│   ├── stage3\_build\_jitter\_library.R # Stage 4: MC jitter generation
-
-│   ├── stage4\_compute\_metrics.R    # Stage 5: Fast metric computation
-
-│   ├── compute\_metrics.R           # Metric computation functions
-
-│   ├── process\_to\_hex.R            # Legacy + shared utilities
-
-│   ├── fiaDataPull.R              # FIA data acquisition
-
-│   └── ...
-
-├── data/
-
-│   ├── interim/
-
-│   │   └── fia\_region/            # FIA data (Stage 2)
-
-│   └── processed/
-
-│       ├── plot\_hex\_assignments.csv      # Stage 3 output
-
-│       └── mc\_jitter\_library/            # Stage 4 output
-
-│           ├── jitter\_library.parquet   # Jittered coordinates
-
-│           └── manifest.yml             # Metadata
-
-├── runs/
-
-│   └── {run\_id}/                  # Stage 5 outputs
-
-│       ├── hex\_aglb\_results.csv   # Metric results
-
-│       └── viz/                   # Optional visualizations
-
-├── configs/
-
-│   ├── process.yml                # Main configuration
-
-│   ├── fia\_pull.yml              # FIA download settings
-
-│   └── hex\_filter.yml            # Hex grid filtering
-
-└── run\_pipeline.R                 # Master pipeline controller
-
-Performance
-
-Stage timings (40k plots, 100 MC reps, 7 states):
-
-StageTimeCacheableNotes1. Hex Filter~5 sec✓Run once per study area2. FIA Pull~10-30 min✓Run once per data update3. Plot Assignment~30 sec✓Run once per hex×FIA combo4. Jitter Library~15-20 min✓Expensive but cached5. Metric Computation~1-2 min✗Fast, run repeatedly
-
-Key insight: Stage 4 is expensive but runs once. Stage 5 is fast and runs many times for different metrics.
-
-Advanced Usage
-
-Batch Compute Multiple Metrics
-
-bash# Create a simple loop script
-
-for METRIC in aglb carbon mortality; do
-
-&nbsp; sed -i "s/^metric:.\*/metric: \\"$METRIC\\"/" configs/process.yml
-
-&nbsp; Rscript run\_pipeline.R --compute
-
-done
-
-Different Jitter Libraries
-
-You can maintain multiple jitter libraries with different parameters:
-
-bash# Build high-precision library (200 reps)
-
-sed -i 's/mc\_reps:.\*/mc\_reps: 200/' configs/process.yml
-
-Rscript run\_pipeline.R --jitter --overwrite
-
-
-
-\# This creates a new library; metrics computed will use it
-
-Inspect Cached Data
-
-R# Check plot assignments
-
-assignments <- readr::read\_csv("data/processed/plot\_hex\_assignments.csv")
-
-summary(assignments)
-
-
-
-\# Check jitter library
-
-library(arrow)
-
-jitters <- read\_parquet("data/processed/mc\_jitter\_library/jitter\_library.parquet")
-
-head(jitters)
-
-
-
-\# See how many jittered versions per plot
-
-table(jitters$replicate\_id)
-
-Troubleshooting
-
-"Jitter library not found"
-
-Run Stage 4:
-
-bashRscript run\_pipeline.R --jitter
-
-"Plot assignments not found"
-
-Run Stage 3:
-
-bashRscript run\_pipeline.R --assign
-
-Changed hex grid or FIA data
-
-Rebuild Stages 3-4:
-
-bashRscript run\_pipeline.R --assign --jitter --overwrite
-
-Metrics seem wrong
-
-Check that the jitter library matches your current hex grid and FIA data:
-
-Rlibrary(yaml)
-
-meta <- read\_yaml("data/processed/mc\_jitter\_library/manifest.yml")
-
-print(meta)
-
-Benefits of This Architecture
-
-
-
-Separation of Concerns: Expensive jittering separated from fast metric computation
-
-Reproducibility: Same jitter library used across all metrics
-
-Efficiency: Compute 10 metrics in the time old pipeline took for 1
-
-Flexibility: Change metrics without re-running expensive operations
-
-Scalability: Add more metrics without performance penalty
-
-Transparency: Original FIA coordinates preserved for validation
-
-
-
-Migration from Old Pipeline
-
-If you have existing runs from process\_to\_hex.R:
-
-bash# One-time: Build the cache
-
-Rscript run\_pipeline.R --assign --jitter
-
-
-
-\# Then use new fast pipeline
-
-Rscript run\_pipeline.R --compute
-
-The new pipeline produces the same results but runs much faster for subsequent metrics.
-
+Soren Donisvitch  
+UVM FEMC / Forest Inventory Analysis

@@ -5,8 +5,8 @@ suppressPackageStartupMessages({
   library(fs); library(yaml); library(dplyr); library(readr); library(ggplot2)
 })
 
-source("R/06_compute_metrics.R")
-source("R/07_error_analysis.R")
+source("R/02_uncertainty/02_compute_metrics.R")
+source("R/04_analysis/01_error_analysis.R")
 
 `%||%` <- function(a,b) if (!is.null(a)) a else b
 
